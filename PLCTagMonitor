@@ -1,0 +1,569 @@
+"""PLC Tag Latch Monitor
+Imports a Siemens TIA PLC-tag Excel export and shows Name, Address and Comment.
+Only the tags you tick in the "Poll" column are read from the PLC. Any polled
+bit (%I / %Q / %M) that goes TRUE is latched, so you can see it fired even after
+it switched off. Comments can be edited (double-click a comment cell). Results
+(comments, polled, tested, timestamps) can be exported to Excel and re-imported.
+
+Install:  pip install openpyxl python-snap7
+"""
+import re
+import threading
+import time
+import tkinter as tk
+import tkinter.font as tkfont
+from datetime import datetime
+from tkinter import filedialog, messagebox, ttk
+
+import openpyxl
+from openpyxl.styles import Font, PatternFill
+
+try:
+    import snap7
+    from snap7.util import get_bool
+    try:
+        from snap7.type import Area            # python-snap7 2.x
+    except ImportError:
+        from snap7.types import Areas as Area  # python-snap7 1.x
+    AREAS = {"I": Area.PE, "Q": Area.PA, "M": Area.MK}
+except ImportError:
+    snap7 = None
+
+ADDR = re.compile(r"^%?([IQM])(\d+)\.([0-7])$", re.I)
+YES = ("yes", "true", "1", "x")
+NOW = lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+COLS = ("poll", "name", "addr", "comment", "live", "time")
+HEAD = ("Poll", "Name", "Address", "Comment", "Live", "First triggered")
+WIDTH = (55, 280, 100, 300, 90, 190)
+
+# Layout offsets in pixels, matched to the reference screenshot (tweak here)
+TOP_LEFT = 139       # gap before the top bar (Import Excel ...), lines up with the boxes below
+SEL_BOX_LEFT = 138   # gap before the "Selected Rows" box (from the left edge)
+ROWS_BOX_GAP = 56    # gap between the "Selected Rows" and "All Rows" boxes
+RESET_RIGHT = 82     # gap right of the "First Triggered Data" box
+POP_RIGHT = 36       # gap right of the "Pop out window" button
+
+
+def _col(cells, name, prefix=False):
+    for i, c in enumerate(cells):
+        if c == name or (prefix and c.startswith(name)):
+            return i
+    return None
+
+
+def load_tags(path):
+    """Read a TIA 'Export to Excel' tag table (or a file written by Export results)."""
+    tags, seen = [], set()
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    for ws in wb.worksheets:
+        idx = None
+        for row in ws.iter_rows(values_only=True):
+            cells = [str(c or "").strip().lower() for c in row]
+            if idx is None:  # find the header row
+                ni, ai = _col(cells, "name"), _col(cells, "logical address")
+                if ni is not None and ai is not None:
+                    idx = dict(name=ni, addr=ai, comment=_col(cells, "comment", True),
+                               poll=_col(cells, "polled"), tested=_col(cells, "tested"),
+                               when=_col(cells, "first triggered"))
+                continue
+
+            def get(k):
+                i = idx[k]
+                return row[i] if i is not None and i < len(row) else None
+
+            if not get("name") or not get("addr"):
+                continue
+            m = ADDR.match(str(get("addr")).strip())
+            name = str(get("name")).strip()
+            if not m or name in seen:
+                continue
+            seen.add(name)
+            area, byte, bit = m.group(1).upper(), int(m.group(2)), int(m.group(3))
+            tested = str(get("tested") or "").strip().lower() in YES
+            when = get("when")
+            if isinstance(when, datetime):
+                when = when.strftime("%Y-%m-%d %H:%M:%S")
+            tags.append(dict(
+                name=name, addr=f"%{area}{byte}.{bit}", area=area, byte=byte, bit=bit,
+                comment=str(get("comment") or "").replace("\n", " ").strip(),
+                poll=str(get("poll") or "").strip().lower() in YES,
+                live=False, prev=False, latched=tested, time=str(when or "") if tested else ""))
+    return tags
+
+
+class App:
+    def __init__(self, root):
+        self.root = root
+        root.title("PLC Tag Latch Monitor")
+        root.geometry("1280x760")
+        for fname in ("TkDefaultFont", "TkTextFont", "TkHeadingFont", "TkMenuFont"):
+            tkfont.nametofont(fname).configure(size=11, weight="normal")
+        ttk.Style().configure("Treeview", rowheight=28)
+        self.tags, self.cfg, self.running, self.dirty = [], None, False, False
+        self.status, self.rendered = "Idle", {}
+        self.last, self.last_time = None, ""
+        self.pop, self.trigs, self.seen, self.flash = None, 0, 0, 0
+        self.lsig = None
+
+        # --- top bar: import/export + connection ---
+        top = ttk.Frame(root, padding=6)
+        top.pack(fill="x")
+        ttk.Button(top, text="Import Excel…", command=self.import_xlsx).pack(side="left", padx=(TOP_LEFT, 0))
+        ttk.Button(top, text="Export results…", command=self.export_xlsx).pack(side="left", padx=4)
+        self.ip = tk.StringVar(value="192.168.0.1")
+        self.rack, self.slot = tk.StringVar(value="0"), tk.StringVar(value="1")
+        self.sim = tk.BooleanVar(value=True)
+        for label, var, w in (("  PLC IP:", self.ip, 14), ("  Rack:", self.rack, 3), ("Slot:", self.slot, 3)):
+            ttk.Label(top, text=label).pack(side="left")
+            ttk.Entry(top, textvariable=var, width=w).pack(side="left")
+        ttk.Checkbutton(top, text="Simulate (double-click a row)", variable=self.sim).pack(side="left", padx=8)
+        self.btn = ttk.Button(top, text="Start", command=self.toggle)
+        self.btn.pack(side="left")
+
+        # --- poll ticks (left): titled boxes, ✓ above ✗ ---
+        bar = ttk.Frame(root, padding=(6, 4))
+        bar.pack(fill="x")
+        sel_box = ttk.LabelFrame(bar, text="Selected Rows", padding=(6, 2))
+        sel_box.pack(side="left", padx=(SEL_BOX_LEFT, 0))
+        ttk.Button(sel_box, text="✓", width=4,
+                   command=lambda: self.set_poll(self.tree.selection(), True)).pack(fill="x")
+        ttk.Button(sel_box, text="✗", width=4,
+                   command=lambda: self.set_poll(self.tree.selection(), False)).pack(fill="x", pady=(3, 0))
+        all_box = ttk.LabelFrame(bar, text="All Rows", padding=(6, 2))
+        all_box.pack(side="left", padx=(ROWS_BOX_GAP, 0))
+        ttk.Button(all_box, text="✓", width=4,
+                   command=lambda: self.set_poll(self.tree.get_children(), True)).pack(fill="x")
+        ttk.Button(all_box, text="✗", width=4,
+                   command=lambda: self.set_poll([str(i) for i in range(len(self.tags))], False)).pack(fill="x", pady=(3, 0))
+
+        rf = ttk.LabelFrame(bar, text="First Triggered Data", padding=(6, 2))
+        rf.pack(side="right", padx=(0, RESET_RIGHT))
+        ttk.Button(rf, text="Reset selected", command=lambda: self.reset(False)).pack(fill="x")
+        ttk.Button(rf, text="Reset all", command=lambda: self.reset(True)).pack(fill="x", pady=(3, 0))
+
+        # --- filter row (centered: packed without fill) ---
+        fbar = ttk.Frame(root, padding=(6, 2))
+        fbar.pack()
+        ttk.Label(fbar, text="Filter:").pack(side="left")
+        self.flt = tk.StringVar()
+        self.flt.trace_add("write", lambda *_: self.fill())
+        ttk.Entry(fbar, textvariable=self.flt, width=24).pack(side="left", padx=(6, 18))
+        self.only, self.only_not = tk.BooleanVar(), tk.BooleanVar()
+        self.only_poll = tk.BooleanVar()
+        ttk.Checkbutton(fbar, text="Show tested only", variable=self.only,
+                        command=lambda: self.pick_filter(self.only, self.only_not)).pack(side="left", padx=8)
+        ttk.Checkbutton(fbar, text="Show untested only", variable=self.only_not,
+                        command=lambda: self.pick_filter(self.only_not, self.only)).pack(side="left", padx=8)
+        ttk.Checkbutton(fbar, text="Show ✓ only", variable=self.only_poll, command=self.fill).pack(side="left", padx=8)
+
+        # --- last triggered panel ---
+        lf = ttk.LabelFrame(root, text="Last triggered", padding=6)
+        lf.pack(fill="x", padx=6, pady=(6, 0))
+        self.lt_name = ttk.Label(lf, text="—", font=("TkDefaultFont", 13, "normal"))
+        self.lt_addr = ttk.Label(lf, text="")
+        self.lt_live = tk.Label(lf, text="", font=("TkDefaultFont", 13, "normal"), width=12)
+        self.lt_time = ttk.Label(lf, text="")
+        self.lt_cmt = ttk.Label(lf, text="", foreground="gray")
+        for w in (self.lt_name, self.lt_addr, self.lt_live, self.lt_time, self.lt_cmt):
+            w.pack(side="left", padx=8)
+        ttk.Button(lf, text="Pop out window", command=self.open_pop).pack(side="right", padx=(0, POP_RIGHT))
+
+        # --- status + table ---
+        self.lbl = ttk.Label(root, text="Idle")
+        self.lbl.pack(side="bottom", fill="x", padx=6, pady=(0, 4))
+        self.tree = ttk.Treeview(root, columns=COLS, show="headings", selectmode="extended")
+        for c, t, w in zip(COLS, HEAD, WIDTH):
+            self.tree.heading(c, text=t)
+            self.tree.column(c, width=w, anchor="center" if c == "poll" else "w")
+        self.tree.tag_configure("live", background="#c8f7c5")
+        self.tree.tag_configure("latched", background="#ffe9a8")
+        sb = ttk.Scrollbar(root, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.tree.pack(fill="both", expand=True, padx=6, pady=6)
+        self.tree.bind("<Button-1>", self.on_click)
+        self.tree.bind("<Double-1>", self.on_dbl)
+
+        root.protocol("WM_DELETE_WINDOW", self.close)
+        self.tick()
+
+    # ---------- import / export ----------
+    def import_xlsx(self):
+        if (self.dirty or any(t["latched"] for t in self.tags)) and not messagebox.askyesno(
+                "Replace session?", "Importing replaces the current tags, comments and results.\n"
+                "Export first if you want to keep them. Continue?"):
+            return
+        path = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xlsm")])
+        if not path:
+            return
+        try:
+            self.tags = load_tags(path)
+        except Exception as e:
+            return messagebox.showerror("Import failed", str(e))
+        self.dirty, self.last = False, None
+        if not self.tags:
+            messagebox.showwarning("No tags", "No bit addresses (%I0.0, %Q0.1, %M1.0 …) found.")
+        elif not any(t["poll"] for t in self.tags):
+            self.status = "Imported - select tags and use the ✓ under 'Selected Rows' (or tick the Poll column)"
+        self.fill()
+
+    def export_xlsx(self):
+        """Save all tags + comments + polled/tested state. Re-import with 'Import Excel…'."""
+        if not self.tags:
+            return messagebox.showinfo("Nothing to export", "Import a tag file first.")
+        path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")],
+            initialfile=f"plc_test_results_{datetime.now():%Y%m%d_%H%M}.xlsx")
+        if not path:
+            return False
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Test results"
+        ws.append(["Name", "Logical Address", "Comment", "Polled", "Tested", "First triggered"])
+        for c in ws[1]:
+            c.font = Font(bold=True)
+        green = PatternFill("solid", fgColor="C8F7C5")
+        for t in self.tags:
+            ws.append([t["name"], t["addr"], t["comment"], "Yes" if t["poll"] else "No",
+                       "Yes" if t["latched"] else "No", t["time"]])
+            if t["latched"]:
+                for c in ws[ws.max_row]:
+                    c.fill = green
+        for col, w in zip("ABCDEF", (40, 16, 50, 8, 10, 20)):
+            ws.column_dimensions[col].width = w
+        ws.freeze_panes = "A2"
+        try:
+            wb.save(path)
+        except OSError as e:  # e.g. file open in Excel
+            messagebox.showerror("Export failed", str(e))
+            return False
+        self.dirty = False
+        n = sum(t["latched"] for t in self.tags)
+        messagebox.showinfo("Exported", f"Saved {len(self.tags)} tags ({n} tested).")
+        return True
+
+    # ---------- table ----------
+    def pick_filter(self, mine, other):
+        """'Triggered only' and 'Not triggered only' exclude each other."""
+        if mine.get():
+            other.set(False)
+        self.fill()
+
+    def fill(self):
+        sel, top = self.tree.selection(), self.tree.yview()[0]
+        self.tree.delete(*self.tree.get_children())
+        self.rendered.clear()
+        q = self.flt.get().lower()
+        for i, t in enumerate(self.tags):
+            if q and q not in (t["name"] + " " + t["addr"] + " " + t["comment"]).lower():
+                continue
+            if self.only.get() and not t["latched"]:
+                continue
+            if self.only_not.get() and t["latched"]:
+                continue
+            if self.only_poll.get() and not t["poll"]:
+                continue
+            self.tree.insert("", "end", iid=str(i))
+        self.tree.selection_set([i for i in sel if self.tree.exists(i)])
+        self.tree.yview_moveto(top)
+
+    def set_poll(self, iids, on):
+        for i in iids:
+            t = self.tags[int(i)]
+            t["poll"] = on
+            if not on:
+                t["live"] = t["prev"] = False
+        self.dirty = True
+
+    def rise(self, t):
+        """A polled bit went FALSE -> TRUE."""
+        if not t["latched"]:
+            t["latched"], t["time"] = True, NOW()
+            self.dirty = True
+        self.last, self.last_time = t, NOW()
+        self.trigs += 1
+
+    def reset(self, everything):
+        ids = self.tree.get_children() if everything else self.tree.selection()
+        for i in ids:
+            t = self.tags[int(i)]
+            t["latched"], t["time"] = False, ""
+            self.dirty = True
+
+    def col_at(self, x):
+        return COLS[int(self.tree.identify_column(x)[1:]) - 1]
+
+    def on_click(self, ev):
+        if self.tree.identify_region(ev.x, ev.y) != "cell":
+            return
+        iid = self.tree.identify_row(ev.y)
+        if iid and self.col_at(ev.x) == "poll":
+            self.set_poll([iid], not self.tags[int(iid)]["poll"])
+            return "break"
+
+    def on_dbl(self, ev):
+        if self.tree.identify_region(ev.x, ev.y) != "cell":
+            return
+        iid, col = self.tree.identify_row(ev.y), self.col_at(ev.x)
+        if not iid or col == "poll":
+            return
+        if col == "comment":
+            return self.edit_comment(iid)
+        if self.sim.get():
+            t = self.tags[int(iid)]
+            if not t["poll"]:
+                self.status = f"{t['name']} is not polled - tick its Poll box first"
+                return
+            t["live"] = not t["live"]
+            if t["live"] and not t["prev"]:
+                self.rise(t)
+            t["prev"] = t["live"]
+
+    def edit_comment(self, iid):
+        box = self.tree.bbox(iid, "comment")
+        if not box:
+            return
+        x, y, w, h = box
+        e = ttk.Entry(self.tree)
+        e.place(x=x, y=y, width=w, height=h)
+        e.insert(0, self.tags[int(iid)]["comment"])
+        e.focus_set()
+        e.select_range(0, "end")
+        done = []
+
+        def finish(save):
+            if done:
+                return
+            done.append(1)
+            if save and e.get() != self.tags[int(iid)]["comment"]:
+                self.tags[int(iid)]["comment"] = e.get()
+                self.dirty = True
+            e.destroy()
+
+        e.bind("<Return>", lambda _: finish(True))
+        e.bind("<FocusOut>", lambda _: finish(True))
+        e.bind("<Escape>", lambda _: finish(False))
+
+    # ---------- PLC polling ----------
+    def toggle(self):
+        if self.running:
+            self.running = False
+            self.btn.config(text="Start")
+            return
+        try:
+            self.cfg = dict(sim=self.sim.get(), ip=self.ip.get().strip(),
+                            rack=int(self.rack.get()), slot=int(self.slot.get()))
+        except ValueError:
+            return messagebox.showerror("Error", "Rack/Slot must be numbers")
+        if not self.cfg["sim"] and snap7 is None:
+            return messagebox.showerror("Missing", "pip install python-snap7")
+        self.running = True
+        self.btn.config(text="Stop")
+        threading.Thread(target=self.poll, daemon=True).start()
+
+    def read_plc(self, client):
+        """Read only the bytes that hold polled tags (nearby bytes share one read)."""
+        for area, code in AREAS.items():
+            ts = [t for t in self.tags if t["poll"] and t["area"] == area]
+            if not ts:
+                continue
+            spans = []
+            for b in sorted({t["byte"] for t in ts}):
+                if spans and b - spans[-1][1] <= 16:
+                    spans[-1][1] = b
+                else:
+                    spans.append([b, b])
+            for lo, hi in spans:
+                data = client.read_area(code, 0, lo, hi - lo + 1)
+                for t in ts:
+                    if lo <= t["byte"] <= hi:
+                        t["live"] = bool(get_bool(data, t["byte"] - lo, t["bit"]))
+
+    def poll(self):
+        client = None
+        while self.running:
+            try:
+                if not self.cfg["sim"]:
+                    if client is None:
+                        client = snap7.client.Client()
+                        client.connect(self.cfg["ip"], self.cfg["rack"], self.cfg["slot"])
+                    self.read_plc(client)
+                    self.status = f"Connected to {self.cfg['ip']}"
+                else:
+                    self.status = "Simulation"
+                for t in self.tags:
+                    if not t["poll"]:
+                        t["live"] = t["prev"] = False
+                        continue
+                    if t["live"] and not t["prev"]:   # rising edge -> latch
+                        self.rise(t)
+                    t["prev"] = t["live"]
+            except Exception as e:
+                self.status = f"Error: {e}"
+                client = None
+                time.sleep(1)
+            time.sleep(0.1)
+        if client:
+            client.disconnect()
+        self.status = "Stopped"
+
+    # ---------- pop-out "Last triggered" window ----------
+    def open_pop(self):
+        if self.pop:
+            self.pop.lift()
+            return
+        p = self.pop = tk.Toplevel(self.root)
+        p.title("Last triggered")
+        p.geometry("760x380")
+        p.minsize(240, 120)
+        p.attributes("-topmost", True)
+        self.top_var = tk.BooleanVar(value=True)
+        strip = ttk.Frame(p, padding=(6, 2))
+        strip.pack(side="bottom", fill="x")
+        ttk.Checkbutton(strip, text="Always on top", variable=self.top_var,
+                        command=lambda: p.attributes("-topmost", self.top_var.get())).pack(side="left")
+        ttk.Label(strip, text="Double-click = fullscreen, Esc = exit fullscreen",
+                  foreground="gray").pack(side="right")
+        self.pop_area = tk.Frame(p, bg="#37474f")
+        self.pop_area.pack(fill="both", expand=True)
+        family = tkfont.nametofont("TkDefaultFont").actual("family")
+        self.pop_fonts, self.pop_labels = [], []
+        # name, address + comment, live value, time  (rely, relheight, bold)
+        for rely, relh, bold in ((0.02, 0.28, True), (0.30, 0.14, False),
+                                 (0.44, 0.38, True), (0.84, 0.12, False)):
+            f = tkfont.Font(family=family, size=-20, weight="normal")
+            lab = tk.Label(self.pop_area, font=f, anchor="center")
+            lab.place(relx=0, rely=rely, relwidth=1, relheight=relh)
+            self.pop_fonts.append(f)
+            self.pop_labels.append(lab)
+
+        def fullscreen(_=None):
+            p.attributes("-fullscreen", not p.attributes("-fullscreen"))
+
+        for w in [self.pop_area] + self.pop_labels:
+            w.bind("<Double-Button-1>", fullscreen)
+        p.bind("<Escape>", lambda _: p.attributes("-fullscreen", False))
+        self.pop_area.bind("<Configure>", lambda _: self.pop_update())
+        p.protocol("WM_DELETE_WINDOW", self.close_pop)
+        self.pop_update()
+
+    def close_pop(self):
+        if self.pop:
+            self.pop.destroy()
+        self.pop = None
+
+    def pop_update(self, flash_on=False):
+        """Redraw the pop-out: colour by state, text scaled to fit the window."""
+        if not self.pop:
+            return
+        t = self.last
+        if t is None:
+            bg, fg = "#37474f", "white"
+            texts = ("Waiting for trigger…", "", "", "")
+        else:
+            on = t["poll"] and t["live"]
+            bg = "#2ecc40" if on else "#ffc107" if t["poll"] else "#9e9e9e"
+            fg = "black"
+            sub = t["addr"] + (f"   {t['comment']}" if t["comment"] else "")
+            live = "● ON" if on else "○ OFF" if t["poll"] else "not polled"
+            texts = (t["name"], sub, live, f"triggered {self.last_time}")
+        if flash_on:  # brief white flash on every new trigger
+            bg, fg = "white", "black"
+        self.pop_area.config(bg=bg)
+        w = max(self.pop_area.winfo_width(), 50)
+        h = max(self.pop_area.winfo_height(), 50)
+        for lab, font, text, frac in zip(self.pop_labels, self.pop_fonts, texts,
+                                         (0.28, 0.14, 0.38, 0.10)):
+            lab.config(text=text, bg=bg, fg=fg)
+            px = int(min(h * frac * 0.8, w * 0.95 / (max(len(text), 1) * 0.65)))
+            font.configure(size=-max(px, 8))
+
+    # ---------- UI refresh ----------
+    def tick(self):
+        if self.only.get() or self.only_not.get() or self.only_poll.get():
+            sig = tuple((t["latched"], t["poll"]) for t in self.tags)
+            if sig != self.lsig:
+                self.lsig = sig
+                self.fill()
+        for iid in self.tree.get_children():
+            t = self.tags[int(iid)]
+            live = ("● ON" if t["live"] else "○ off") if t["poll"] else "–"
+            vals = ("☑" if t["poll"] else "☐", t["name"], t["addr"], t["comment"], live,
+                    t["time"] or ("Tested" if t["latched"] else ""))
+            if self.rendered.get(iid) != vals:
+                self.rendered[iid] = vals
+                tag = "live" if t["poll"] and t["live"] else "latched" if t["latched"] else ""
+                self.tree.item(iid, values=vals, tags=(tag,))
+
+        t = self.last
+        if t:
+            on = t["poll"] and t["live"]
+            self.lt_name.config(text=t["name"])
+            self.lt_addr.config(text=t["addr"])
+            self.lt_live.config(text="● ON" if on else "○ OFF" if t["poll"] else "not polled",
+                                bg="#c8f7c5" if on else "#e0e0e0", fg="black")
+            self.lt_time.config(text=f"triggered {self.last_time}")
+            self.lt_cmt.config(text=t["comment"])
+        else:
+            self.lt_name.config(text="—")
+            for w in (self.lt_addr, self.lt_time, self.lt_cmt):
+                w.config(text="")
+            self.lt_live.config(text="", bg=self.root.cget("bg"))
+
+        n = sum(x["latched"] for x in self.tags)
+        p = sum(x["poll"] for x in self.tags)
+        self.lbl.config(text=f"{self.status}   |   {len(self.tags)} tags   |   {p} polled   |   {n} triggered")
+        if self.trigs != self.seen:        # new trigger -> flash the pop-out
+            self.seen, self.flash = self.trigs, 6
+        self.pop_update(self.flash % 2 == 1)
+        if self.flash:
+            self.flash -= 1
+        self.root.after(200, self.tick)
+
+    def ask_close(self):
+        """Modal dialog -> 'save', 'close' or 'cancel'."""
+        d = tk.Toplevel(self.root)
+        d.title("Close PLC Tag Monitor")
+        d.transient(self.root)
+        d.resizable(False, False)
+        d.attributes("-topmost", True)   # stay visible even above the pop-out window
+        res = ["cancel"]
+
+        def pick(v):
+            res[0] = v
+            d.destroy()
+
+        ttk.Label(d, padding=16, justify="left", text=(
+            "Did you remember to export your progress?\n\n"
+            "Tested tags, comments and polling choices are lost\n"
+            "if you close without exporting.")).pack()
+        row = ttk.Frame(d, padding=(16, 0, 16, 16))
+        row.pack(fill="x")
+        ttk.Button(row, text="Export results…", command=lambda: pick("save")).pack(side="left")
+        ttk.Button(row, text="Close without saving", command=lambda: pick("close")).pack(side="left", padx=6)
+        ttk.Button(row, text="Cancel", command=lambda: pick("cancel")).pack(side="right")
+        d.protocol("WM_DELETE_WINDOW", lambda: pick("cancel"))
+        d.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - d.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - d.winfo_height()) // 3
+        d.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        d.grab_set()
+        self.root.wait_window(d)
+        return res[0]
+
+    def close(self):
+        if self.tags and self.dirty:       # unsaved progress since last export/import
+            choice = self.ask_close()
+            if choice == "cancel":
+                return
+            if choice == "save" and not self.export_xlsx():
+                return                      # export cancelled or failed -> stay open
+        self.running = False
+        self.root.destroy()
+
+
+if __name__ == "__main__":
+    r = tk.Tk()
+    App(r)
+    r.mainloop()
