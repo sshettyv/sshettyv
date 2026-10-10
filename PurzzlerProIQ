@@ -2,12 +2,15 @@
 """
 IQ Puzzler Pro - hint helper (straight 11 x 5 board and diagonal board)
 
-1. SET UP : choose the board layout (straight or diagonal), then load a puzzle card
-           from the dropdown (straight cards 1-16, diagonal cards 41-80), or
-           pick a piece, rotate/flip it and click on the board to place it.  Right-click a piece to remove it.
-2. LOCK   : "Lock & solve" freezes the setup and finds a full solution.
-3. HINTS  : every press of "Hint" reveals one more piece of the solution, most
-           forced piece first, with a plain-language reason for each one.
+1. PICK    : choose the board layout (straight or diagonal), then either a puzzle
+           card (straight cards 1-40, diagonal cards 41-80) or "Free play" (empty
+           board).  The pieces printed on a card are fixed (dark outline).
+2. PLAY    : drag the other pieces from the tray onto the board.  Right-click / R /
+           mouse wheel = rotate, F = flip, Undo = take back the last piece.
+3. HINTS   : press "Hint" at any time - it looks at what is on the board right now
+           and shows the most forced piece next (gold outline) with a plain-language
+           reason.  Press it again for the next step, or "Solution" to see every
+           remaining piece.  If your pieces can't be completed, it tells you.
 
 Only the Python standard library is used (Python 3.8+ with tkinter).
 Run:   python iq_puzzler_helper.py
@@ -49,29 +52,54 @@ DEFAULT_PIECES = [
 ]
 
 
-# Puzzle cards from the Smart Games "Starter / Junior / Expert / Master" booklet.
+# Puzzle cards 1-40 (Starter 1-12, Junior 13-24, Expert 25-30, Master 31-36, Wizard 37-40)
+# from the IQ Puzzler Pro 11 x 5 challenge booklet.
 # Each card = 5 rows of 11 characters; "." is an empty hole.  Letters:
 LETTERS = {"Y": "Yellow", "K": "Pink", "T": "Teal", "L": "Lime", "P": "Purple",
            "D": "Dark red", "C": "Cyan", "O": "Orange", "G": "Green",
            "W": "Pale blue", "R": "Red", "B": "Blue"}
 
 STRAIGHT_CARDS = [
-    ("1 - Starter", ["PGGGDLLLTTT", "PPGDDLWL.TT", "CPPDRWW....", "CRRRRKK....", "CCCKKK....."]),
-    ("2 - Starter", ["CCCDPPYYYYB", "C..DDPPYBBB", "C...DGPWWLL", ".....GGWKKL", ".....GKKKLL"]),
-    ("3 - Starter", ["RRBBBCCCTTT", "R...BDKCTTO", "R...DDKCOOO", "R...DGKKLOL", "....GGGKLLL"]),
-    ("4 - Starter", ["GGGPOOKKKWW", "CGPPYOO.KKW", "CPPYYOT....", "CCCRYTT....", "RRRRYTT...."]),
-    ("5 - Junior",  ["YYYYKKTT...", "PYKKKTTT...", "PPDDCCC....", "WPPDDRC....", "WWRRRRC...."]),
-    ("6 - Junior",  ["YYYYPPW....", "BBYPPWW....", "CBDPLLO....", "CBDDLOO....", "CCCDLLOO..."]),
-    ("7 - Junior",  ["TTTLLLB....", "TTOLYLB....", "WWOOYBB....", "WOORYYG....", "RRRRYGGG..."]),
-    ("8 - Junior",  ["YGGGWW.....", "YYGTTW.....", "YBCTT......", "YBCTDD.....", "BBCCCDD...."]),
-    ("9 - Expert",  ["YYYYG......", "WWYGG......", "WBBBG......", "LBLTT......", "LLLTTT....."]),
-    ("10 - Expert", ["..WWRRPPKKK", "...WRPPKKOO", "....RP..OOB", "....R....OB", ".........BB"]),
-    ("11 - Expert", ["LLLTTGGGP..", "L.LTTTGPP..", "....DDPP...", ".....DD....", "..........."]),
-    ("12 - Expert", ["GTTTYYYY...", "GGTT.YLL...", "G.....L....", "......LL...", "..........."]),
-    ("13 - Master", ["......TTTWW", "......TT..W", ".....GGG...", "......G....", "..........."]),
-    ("14 - Master", ["......WWBBB", ".......W..B", "......DD...", ".....DD....", "..........."]),
-    ("15 - Master", ["...KKDD....", ".KKKDDW....", ".....WW....", "...........", "..........."]),
-    ("16 - Master", ["....TTTYYYY", "....TTR.Y..", "...RRRR....", "...........", "..........."]),
+    ("1 - Starter",  ["KYYYYOBBB..", "KKGYOOB....", "CKGGDOO....", "CKGWDDTT...", "CCCWWDTTT.."]),
+    ("2 - Starter",  ["BBDKYYYYLLL", "BDDKRRY.L.L", "BDPKKR.....", "TTPPKRW....", "TTTPPRWW..."]),
+    ("3 - Starter",  ["WYYYYKGGG..", "WWYPOKKG...", "LLPPOOKB...", "LPPOORKB...", "LLRRRRBB..."]),
+    ("4 - Starter",  ["GGGPYLLOO..", "CGPPYLOO...", "CPPYYLLO...", "CCCRYDDW...", "RRRRDDWW..."]),
+    ("5 - Starter",  ["DDTTTKRRCCC", ".DDTTKRLLLC", "....KKRLOLC", "....KYROOWW", "....YYYYOOW"]),
+    ("6 - Starter",  ["LLYCCCBBPPG", "LYYYYCBPPGG", "LL...CBPODG", ".....TTOODD", ".....TTTOOD"]),
+    ("7 - Starter",  ["TTGGGOKKCCC", "TTTGOOOKKKC", "....BBOWPPC", ".....BRWWPP", ".....BRRRRP"]),
+    ("8 - Starter",  ["LLLKBBCCCDD", "L.LKKBCPDDG", "....KBCPPGG", "....KTTRPPG", "....TTTRRRR"]),
+    ("9 - Starter",  ["CCCWGGG....", "CKPWWGDD...", "CKPPBB.DD..", "KKYPPB.....", "KYYYYB....."]),
+    ("10 - Starter", ["YKRRWW.....", "YKKRWD.....", "YYKRODD....", "YGKROODB...", "GGGOOBBB..."]),
+    ("11 - Starter", ["YYYYBBDD...", "OYRRBDD....", "OOORBPP....", "LOLRPPW....", "LLLRPWW...."]),
+    ("12 - Starter", ["TTTCCCBBBKK", ".TT..CBKKKD", ".....CGGGDD", "......WGLDL", "......WWLLL"]),
+    ("13 - Junior",  ["LLDDGGGTTT.", "LDDOOG..TT.", "LLKKOO.....", "KKKROW.....", "RRRRWW....."]),
+    ("14 - Junior",  ["TTGLLCCC...", "TTGGLC.....", "TPGLLCO....", "WPPDDOO....", "WWPPDDOO..."]),
+    ("15 - Junior",  ["OOLLYWW....", "COOLYWK....", "COLLYYK....", "CCCRYGKK...", "RRRRGGGK..."]),
+    ("16 - Junior",  ["KRRYWGGG...", "KKRYWWG....", "CKRYYPB....", "CKRYPPB....", "CCCPPBB...."]),
+    ("17 - Junior",  ["DDKKKBBLL..", "GDDRKKBL...", "GGPR..BLL..", "GPPR.......", "PPRR......."]),
+    ("18 - Junior",  ["KGGGPYYYYRR", "KKGPP..Y..R", "CKPP......R", "CKTTT.....R", "CCCTT......"]),
+    ("19 - Junior",  ["LLLTTTBBPPK", "L.L.TTBPPKK", "......BPDKC", ".......DDKC", ".......DCCC"]),
+    ("20 - Junior",  ["GYYYYCCCLLL", "GG.Y...CLWL", "G......CDWW", ".......DDTT", ".......DTTT"]),
+    ("21 - Junior",  ["YPWWLLL....", "YPPWL.L....", "YYPP..KKK..", "YG......KK.", "GGG........"]),
+    ("22 - Junior",  ["LLPPRRRR...", "LDDPP..R...", "LLDDP......", "TTTW.......", "TTWW......."]),
+    ("23 - Junior",  ["CCCGWWDYYYY", "C.GGGWDDLYL", "C......DLLL", "...........", "..........."]),
+    ("24 - Junior",  ["DKKBBBYYYY.", "DDKKKB..Y..", "CDO........", "COOO.......", "CCCO......."]),
+    ("25 - Expert",  ["KWWPPYYYYTT", "KW..PPY.TTT", "KK...P.....", ".K.........", "..........."]),
+    ("26 - Expert",  ["YYYYPPTWW..", "DDYPPTT.W..", ".DDP.TT....", "...........", "..........."]),
+    ("27 - Expert",  ["DKKYYYY....", "DDKKKYWW...", "GD....W....", "GG.........", "G.........."]),
+    ("28 - Expert",  ["DWWBBBKK...", "DDWBKKK....", "TD.........", "TT.........", "TT........."]),
+    ("29 - Expert",  ["WWLLL......", ".WLGL......", "..GGGKKK...", "....KK.....", "..........."]),
+    ("30 - Expert",  ["CCCWWTTT...", "C...WTTG...", "C......GG..", ".......G...", "..........."]),
+    ("31 - Master",  ["YYYYLLCCC..", "..YPPL..C..", "..PPLL..C..", "..P........", "..........."]),
+    ("32 - Master",  ["TTYYYYWW...", "TTTYDDW....", ".....DD....", "...........", "..........."]),
+    ("33 - Master",  ["TTTD.......", "TT.DD......", "....DBBB...", ".......B...", "..........."]),
+    ("34 - Master",  ["BBBRRRR....", "..B..TR....", ".....TT....", ".....TT....", "..........."]),
+    ("35 - Master",  ["TTLLL......", "TTL.L......", "T...BBB....", "......B....", "..........."]),
+    ("36 - Master",  ["KKKGGG.....", "..KKG......", "..TTT......", "...TT......", "..........."]),
+    ("37 - Wizard",  ["B..........", "BBB........", "..R........", "..RRRR.....", "..........."]),
+    ("38 - Wizard",  ["B..........", "B..........", "BBYYYY.....", "...Y.......", "..........."]),
+    ("39 - Wizard",  ["BBB........", "..B........", "..RRRR.....", ".....R.....", "..........."]),
+    ("40 - Wizard",  ["T..........", "TT.........", "TTYYYY.....", "....Y......", "..........."]),
 ]
 
 
@@ -435,14 +463,14 @@ def candidates(table, sizes, filled, rem_mask, ok):
     return out
 
 
-def plan_hints(table, sizes, filled, rem_mask, solution, names, cancel=None):
+def plan_hints(table, sizes, filled, rem_mask, solution, names, cancel=None, limit=None):
     """Order the solution so the most 'forced' placement comes first and attach a
     plain-language reason to every step."""
     ok = make_region_check(sizes)
     left = list(solution)
     steps = []
     f, rem = filled, rem_mask
-    while left:
+    while left and (limit is None or len(steps) < limit):
         if cancel is not None and cancel.is_set():
             raise Cancelled()
         cover, per_piece = {}, {}
@@ -542,8 +570,25 @@ def save_pieces(pieces):
 # GUI
 # --------------------------------------------------------------------------
 CELL, PAD = 58, 24
+CELL, PAD = 50, 24
 BOARD_W, BOARD_H = STRAIGHT.size()
 GOLD = "#ffd54f"
+TS = 24                       # tray piece size (pixels per ball) - change to resize
+TRAY_COLS = 3
+TRAY_TOP = 34
+FREE = "Free play"
+PANEL_H = 170                # height reserved under the board for timer / status / hints
+SLOT = 4 * TS + 18            # room for the longest piece (4 balls) and its name
+
+
+def transform(cells, anchor, kind):
+    """Rotate ('rot') or mirror ('flip') a shape and keep the 'handle' ball."""
+    f = (lambda r, c: (c, -r)) if kind == "rot" else (lambda r, c: (r, -c))
+    pts = [f(r, c) for r, c in cells]
+    a = f(*anchor)
+    mr = min(r for r, c in pts)
+    mc = min(c for r, c in pts)
+    return (tuple(sorted((r - mr, c - mc) for r, c in pts)), (a[0] - mr, a[1] - mc))
 
 
 class App:
@@ -556,15 +601,15 @@ class App:
         self.layout = STRAIGHT
         self.table = build_placements(self.pieces)
         self.placed = {}          # piece index -> list of (r, c)
-        self.selected = 0
-        self.cur = normalize(self.pieces[0]["cells"])
-        self.hover = None
-        self.locked = False
+        self.shape = [normalize(p["cells"]) for p in self.pieces]   # tray orientation
+        self.history = []         # order in which pieces were placed (for Undo)
+        self.drag = None          # piece currently held with the mouse
+        self.mx = self.my = 0
+        self.fixed = set()        # pieces printed on the loaded card (cannot be moved)
+        self.current = 0          # 0 = free play, n = puzzle card n
         self.solving = False
-        self.solution = []        # [(piece index, cells)]
-        self.hints = 0
+        self.hint_steps = []      # hint(s) currently shown on the board
         self.cancel = threading.Event()
-        self.steps = []
         self.show_why = tk.BooleanVar(value=True)
 
         # Elapsed-time timer (monotonic clock avoids wall-clock changes).
@@ -574,10 +619,17 @@ class App:
         self.timer_after_id = None
 
         self._build_ui()
-        self.refresh()
+        self.load_card(0)
         self._update_timer_display()
 
     # ---------------------------------------------------------------- UI
+    def canvas_size(self):
+        w, h = self.layout.size()
+        self.tray_x = w + 14
+        rows = -(-len(self.pieces) // TRAY_COLS)
+        return (self.tray_x + TRAY_COLS * SLOT + 6,
+                max(h + PANEL_H, TRAY_TOP + rows * SLOT + 6))
+
     def _build_ui(self):
         menu = tk.Menu(self.root)
         pm = tk.Menu(menu, tearoff=0)
@@ -585,109 +637,80 @@ class App:
         menu.add_cascade(label="Pieces", menu=pm)
         self.root.config(menu=menu)
 
-        left = ttk.Frame(self.root, padding=8)
-        left.grid(row=0, column=0)
-        right = ttk.Frame(self.root, padding=8)
-        right.grid(row=0, column=1, sticky="n")
-
-        # --- elapsed timer (placed above the board to keep the right panel compact)
-        timer = ttk.LabelFrame(left, text=" Puzzle timer ", padding=6)
-        timer.pack(fill="x", pady=(0, 8))
-        self.timer_label = ttk.Label(
-            timer, text="00:00:00", anchor="center",
-            font=("TkDefaultFont", 20, "bold"))
-        self.timer_label.pack(fill="x", pady=(0, 6))
-        timer_buttons = ttk.Frame(timer)
-        timer_buttons.pack(fill="x")
-        self.btn_timer_start = ttk.Button(
-            timer_buttons, text="Start", command=self.start_timer)
-        self.btn_timer_start.pack(side="left", expand=True, fill="x", padx=(0, 2))
-        self.btn_timer_stop = ttk.Button(
-            timer_buttons, text="Stop", command=self.stop_timer)
-        self.btn_timer_stop.pack(side="left", expand=True, fill="x", padx=2)
-        self.btn_timer_reset = ttk.Button(
-            timer_buttons, text="Reset", command=self.reset_timer)
-        self.btn_timer_reset.pack(side="left", expand=True, fill="x", padx=(2, 0))
-
-        self.cv = tk.Canvas(left, width=BOARD_W, height=BOARD_H, bg="#cfd8dc",
-                            highlightthickness=0)
-        self.cv.pack()
-        self.cv.bind("<Motion>", self.on_motion)
-        self.cv.bind("<Leave>", lambda e: self.set_hover(None))
-        self.cv.bind("<Button-1>", self.on_click)
-        self.cv.bind("<Button-2>", self.on_right)
-        self.cv.bind("<Button-3>", self.on_right)
-        self.cv.bind("<MouseWheel>", lambda e: self.do_rotate())
-        self.cv.bind("<Button-4>", lambda e: self.do_rotate())
-        self.cv.bind("<Button-5>", lambda e: self.do_rotate())
-        self.root.bind("<Key>", self.on_key)
-
-        self.status = ttk.Label(left, text="", wraplength=BOARD_W, font=("TkDefaultFont", 11))
-        self.status.pack(fill="x", pady=(8, 0))
-        self.why = tk.Label(left, text="", wraplength=BOARD_W, justify="left", anchor="nw",
-                            height=3, fg="#1a237e", font=("TkDefaultFont", 10))
-        self.why.pack(fill="x", pady=(4, 0))
-        ttk.Label(left, foreground="#666", wraplength=BOARD_W,
-                  text="Keys: R / mouse wheel = rotate   F = flip   H = hint   "
-                       "Right-click = remove a piece").pack(fill="x")
-
-        # --- board layout
-        lay = ttk.Frame(right)
-        lay.pack(fill="x", pady=(0, 8))
-        ttk.Label(lay, text="Board layout:").pack(side="left")
+        # --- top bar: board, puzzle, reset / undo, hints
+        bar = tk.Frame(self.root)
+        bar.pack(fill="x", padx=6, pady=(8, 6))
+        tk.Label(bar, text="Board:").pack(side="left")
         self.layout_var = tk.StringVar(value=STRAIGHT.name)
-        self.layout_box = ttk.Combobox(lay, textvariable=self.layout_var, state="readonly",
-                                       values=[l.name for l in LAYOUTS])
-        self.layout_box.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        self.layout_box = ttk.Combobox(bar, textvariable=self.layout_var, state="readonly",
+                                       width=16, values=[l.name for l in LAYOUTS])
+        self.layout_box.pack(side="left", padx=(2, 10))
         self.layout_box.bind("<<ComboboxSelected>>",
                              lambda e: self.change_layout(self.layout_box.current()))
+        tk.Label(bar, text="Puzzle:").pack(side="left")
+        self.card_var = tk.StringVar(value=FREE)
+        self.card_box = ttk.Combobox(bar, textvariable=self.card_var, state="readonly",
+                                     width=20, values=[FREE] + [c[0] for c in STRAIGHT.cards])
+        self.card_box.pack(side="left", padx=(2, 10))
+        self.card_box.bind("<<ComboboxSelected>>",
+                           lambda e: self.load_card(self.card_box.current()))
+        self.btn_clear = tk.Button(bar, text="Reset", width=8, command=self.reset_card)
+        self.btn_undo = tk.Button(bar, text="Undo", width=8, command=self.undo)
+        self.btn_hint = tk.Button(bar, text="Hint (H)", width=9, command=self.hint)
+        self.btn_all = tk.Button(bar, text="Solution", width=9, command=self.show_all)
+        for b_ in (self.btn_clear, self.btn_undo, self.btn_hint, self.btn_all):
+            b_.pack(side="left", padx=4)
+        tk.Checkbutton(bar, text="Show reasoning", variable=self.show_why,
+                       command=self.redraw).pack(side="left", padx=8)
 
-        # --- setup panel
-        setup = ttk.LabelFrame(right, text=" 1 - Set up the puzzle card ", padding=8)
-        setup.pack(fill="x")
-        self.card_var = tk.StringVar(value="Load a puzzle card...")
-        self.card_box = ttk.Combobox(setup, textvariable=self.card_var, state="readonly",
-                                     values=[c[0] for c in STRAIGHT.cards])
-        self.card_box.pack(fill="x", pady=(0, 6))
-        self.card_box.bind("<<ComboboxSelected>>", lambda e: self.load_card(self.card_box.current()))
-        grid = ttk.Frame(setup)
-        grid.pack()
-        self.pal = []
-        for i in range(len(self.pieces)):
-            cv = tk.Canvas(grid, width=92, height=78, bg="#f5f5f5", cursor="hand2",
-                           highlightthickness=1, highlightbackground="#bbb")
-            cv.grid(row=i // 3, column=i % 3, padx=2, pady=2)
-            cv.bind("<Button-1>", lambda e, i=i: self.on_palette(i))
-            self.pal.append(cv)
-        row = ttk.Frame(setup)
-        row.pack(fill="x", pady=(6, 0))
-        self.btn_rot = ttk.Button(row, text="Rotate (R)", command=self.do_rotate)
-        self.btn_flip = ttk.Button(row, text="Flip (F)", command=self.do_flip)
-        self.btn_clear = ttk.Button(row, text="Clear board", command=self.clear_board)
-        for b in (self.btn_rot, self.btn_flip, self.btn_clear):
-            b.pack(side="left", expand=True, fill="x", padx=1)
-        self.btn_lock = ttk.Button(setup, text="Lock setup & solve", command=self.lock_and_solve)
-        self.btn_lock.pack(fill="x", pady=(6, 0))
-        self.btn_edit = ttk.Button(setup, text="Unlock / edit setup", command=self.unlock)
-        self.btn_edit.pack(fill="x", pady=(6, 0))
+        # --- board + tray canvas
+        cw, ch = self.canvas_size()
+        self.cv = tk.Canvas(self.root, width=cw, height=ch, bg="#fafafa",
+                            highlightthickness=0)
+        self.cv.pack()
+        self.cv.bind("<ButtonPress-1>", self.on_press)
+        self.cv.bind("<B1-Motion>", self.on_move)
+        self.cv.bind("<ButtonRelease-1>", self.on_release)
+        self.cv.bind("<Motion>", self.track)
+        self.cv.bind("<Button-2>", lambda e: self.transform_at(e.x, e.y, "rot"))
+        self.cv.bind("<Button-3>", lambda e: self.transform_at(e.x, e.y, "rot"))
+        self.cv.bind("<MouseWheel>", lambda e: self.transform_at(e.x, e.y, "rot"))
+        self.cv.bind("<Button-4>", lambda e: self.transform_at(e.x, e.y, "rot"))
+        self.cv.bind("<Button-5>", lambda e: self.transform_at(e.x, e.y, "rot"))
+        self.root.bind("<Key>", self.on_key)
 
-        # --- hint panel
-        hp = ttk.LabelFrame(right, text=" 2 - Hints ", padding=8)
-        hp.pack(fill="x", pady=(10, 0))
-        self.btn_hint = ttk.Button(hp, text="Hint (H)", command=self.hint)
-        self.btn_hint.pack(fill="x", ipady=6)
-        r2 = ttk.Frame(hp)
-        r2.pack(fill="x", pady=(6, 0))
-        self.btn_undo = ttk.Button(r2, text="Undo hint", command=self.undo_hint)
-        self.btn_reset = ttk.Button(r2, text="Reset hints", command=self.reset_hints)
-        self.btn_all = ttk.Button(r2, text="Show all", command=self.show_all)
-        for b in (self.btn_undo, self.btn_reset, self.btn_all):
-            b.pack(side="left", expand=True, fill="x", padx=1)
-        ttk.Checkbutton(hp, text="Show reasoning on board", variable=self.show_why,
-                        command=self.redraw).pack(anchor="w", pady=(6, 0))
-        self.btn_other = ttk.Button(hp, text="Try a different solution", command=self.another)
-        self.btn_other.pack(fill="x", pady=(6, 0))
-        
+        # --- info panel: sits under the board, left of the tray (no wasted space)
+        bg = "#fafafa"
+        self.panel = tk.Frame(self.root, bg=bg)
+        tbar = tk.Frame(self.panel, bg=bg)
+        tbar.pack(fill="x", padx=6, pady=(6, 0))
+        tk.Label(tbar, text="Timer:", bg=bg).pack(side="left", padx=(0, 2))
+        self.timer_label = tk.Label(tbar, text="00:00:00", width=9, bg=bg,
+                                    font=("Courier", 14, "bold"))
+        self.timer_label.pack(side="left")
+        self.btn_timer_start = tk.Button(tbar, text="Start", width=8, command=self.start_timer)
+        self.btn_timer_stop = tk.Button(tbar, text="Stop", width=8, command=self.stop_timer)
+        self.btn_timer_reset = tk.Button(tbar, text="Reset", width=8, command=self.reset_timer)
+        for b in (self.btn_timer_start, self.btn_timer_stop, self.btn_timer_reset):
+            b.pack(side="left", padx=4)
+
+        self.status = tk.Label(self.panel, text="", wraplength=560, justify="left",
+                               anchor="w", bg=bg, font=("TkDefaultFont", 10))
+        self.status.pack(fill="x", padx=8, pady=(6, 0))
+        self.why = tk.Label(self.panel, text="", wraplength=560, justify="left", anchor="nw",
+                            height=3, fg="#1a237e", bg=bg, font=("TkDefaultFont", 9))
+        self.why.pack(fill="x", padx=8, pady=(2, 0))
+        tk.Label(self.panel, fg="#666", anchor="w", justify="left", bg=bg,
+                 wraplength=560,
+                 text="Drag pieces onto the board.  Right-click / R / wheel = rotate   "
+                      "F = flip   H = hint   Undo = take back the last piece"
+                 ).pack(fill="x", padx=8, pady=(2, 4))
+        self.place_panel()
+
+    def place_panel(self):
+        w, h = self.layout.size()
+        self.panel.place(in_=self.cv, x=0, y=h, width=w, height=PANEL_H)
+        self.panel.lift()
 
     # ------------------------------------------------------- timer
     def _timer_seconds(self):
@@ -748,27 +771,31 @@ class App:
     def cell_at(self, x, y):
         return self.layout.cell_at(x, y)
 
-    def draw_piece(self, cells, color, label=None, halo=False, ghost=None):
+    def draw_piece(self, cells, color, label=None, halo=False, ghost=None, cf=None, k=1.0,
+                   outline=None):
+        cf = cf or self.center
         cs = set(cells)
-        R, B = CELL * 0.40, CELL * 0.27
-        passes = ([(GOLD, R + 5, B + 5)] if halo else []) + [(color, R, B)]
+        R, B = CELL * 0.40 * k, CELL * 0.27 * k
+        passes = ([(GOLD, R + 5 * k, B + 5 * k)] if halo else []) + [(color, R, B)]
         stip = "gray50" if ghost is not None else ""
         edge = {None: "", True: "#00e676", False: "#ff1744"}[ghost]
         for col, rad, th in passes:
             for r, c in cells:
-                cx, cy = self.center(r, c)
+                cx, cy = cf(r, c)
                 for nb in ((r, c + 1), (r + 1, c)):
                     if nb in cs:
-                        nx, ny = self.center(*nb)
+                        nx, ny = cf(*nb)
                         self.cv.create_line(cx, cy, nx, ny, width=2 * th, fill=col,
                                             stipple=stip)
             for r, c in cells:
-                cx, cy = self.center(r, c)
+                cx, cy = cf(r, c)
                 self.cv.create_oval(cx - rad, cy - rad, cx + rad, cy + rad, fill=col,
-                                    outline=edge, width=3 if edge else 1, stipple=stip)
+                                    outline=edge or outline or "",
+                                    width=3 if edge else (2 if outline else 1),
+                                    stipple=stip)
         if label:
             r, c = min(cells)
-            cx, cy = self.center(r, c)
+            cx, cy = cf(r, c)
             self.cv.create_text(cx, cy, text=label, font=("TkDefaultFont", 16, "bold"),
                                 fill="#000" if lum(color) > 150 else "#fff")
 
@@ -776,84 +803,232 @@ class App:
         cv = self.cv
         cv.delete("all")
         w, h = self.layout.size()
-        cv.create_rectangle(6, 6, w - 6, h - 6, fill="#37474f", outline="#263238", width=3)
+        # board: dark plate with the holes
+        cv.create_rectangle(6, 6, w - 6, h - 6, fill="#231f20", outline="#111", width=3)
         for r, c in self.layout.cells:
             cx, cy = self.center(r, c)
-            cv.create_oval(cx - 12, cy - 12, cx + 12, cy + 12, fill="#263238", outline="")
+            cv.create_oval(cx - 11, cy - 11, cx + 11, cy + 11, fill="#3b3739", outline="")
         for i, cells in self.placed.items():
-            self.draw_piece(cells, self.pieces[i]["color"])
-        for k in range(self.hints):
-            i, cells = self.solution[k]
-            last = (k == self.hints - 1)
+            self.draw_piece(cells, self.pieces[i]["color"],
+                            outline="#231f20" if i in self.fixed else None)
+        n = len(self.hint_steps)
+        for k, st in enumerate(self.hint_steps):
+            last = (k == n - 1)
             why = last and self.show_why.get()
             if why:
-                for alt in self.steps[k]["alts"]:
+                for alt in st["alts"]:
                     self.draw_piece(alt, "#ff8a80", ghost=False)
-            self.draw_piece(cells, self.pieces[i]["color"], label=str(k + 1), halo=last)
-            if why and self.steps[k]["key"]:
-                cx, cy = self.center(*self.steps[k]["key"])
+            self.draw_piece(st["cells"], self.pieces[st["piece"]]["color"],
+                            label=str(k + 1) if n > 1 else None, halo=last)
+            if why and st["key"]:
+                cx, cy = self.center(*st["key"])
                 self.cv.create_oval(cx - 31, cy - 31, cx + 31, cy + 31,
                                     outline="#00e5ff", width=4)
-        if not self.locked and not self.solving and self.hover is not None:
+        self.draw_tray()
+        if self.drag:
+            d = self.drag
+            i = d["i"]
+            col = self.pieces[i]["color"]
             cells, ok = self.ghost()
             if cells:
                 inside = [p for p in cells if p in self.layout.cells]
-                self.draw_piece(inside, self.pieces[self.selected]["color"], ghost=ok)
+                if inside:
+                    self.draw_piece(inside, col, ghost=ok)
+            ax, ay = self.layout.center(*d["anchor"])
 
-    def draw_palette(self):
+            def cf(r, c):
+                x, y = self.layout.center(r, c)
+                return self.mx + x - ax, self.my + y - ay
+            self.draw_piece(self.shape[i], col, cf=cf)
+
+    # ------------------------------------------------------------- tray
+    def slot_xy(self, i):
+        return (self.tray_x + (i % TRAY_COLS) * SLOT,
+                TRAY_TOP + (i // TRAY_COLS) * SLOT)
+
+    def tray_center(self, i):
+        sx, sy = self.slot_xy(i)
+        cells = self.shape[i]
+        w = max(c for r, c in cells) + 1
+        h = max(r for r, c in cells) + 1
+        ox = sx + (SLOT - w * TS) / 2
+        oy = sy + 2 + (4 * TS - h * TS) / 2
+        return lambda r, c: (ox + (c + 0.5) * TS, oy + (r + 0.5) * TS)
+
+    def draw_tray(self):
+        cv = self.cv
         done = set(self.placed)
-        if self.locked:
-            done |= {self.solution[k][0] for k in range(self.hints)}
-        for i, cv in enumerate(self.pal):
-            p = self.pieces[i]
-            cv.delete("all")
-            col = "#c8c8c8" if i in done else p["color"]
-            cells = p["cells"]
-            h = max(r for r, c in cells) + 1
-            w = max(c for r, c in cells) + 1
-            s = min(12, 80 // max(w, 1), 56 // max(h, 1))
-            ox, oy = (92 - w * s) / 2, 4 + (56 - h * s) / 2
-            for r, c in cells:
-                cv.create_oval(ox + c * s + 1, oy + r * s + 1, ox + (c + 1) * s - 1,
-                               oy + (r + 1) * s - 1, fill=col, outline="#888")
-            cv.create_text(46, 66, text=p["name"] + (" ✓" if i in done else ""),
-                           font=("TkDefaultFont", 8), fill="#444")
-            sel = (i == self.selected and not self.locked)
-            cv.config(highlightbackground="#ffb300" if sel else "#bbb",
-                      highlightthickness=3 if sel else 1)
+        cv.create_text(self.tray_x, 16, anchor="w", text="Pieces - drag onto the board",
+                       font=("Arial", 10, "bold"))
+        for i, p in enumerate(self.pieces):
+            sx, sy = self.slot_xy(i)
+            cv.create_rectangle(sx + 2, sy, sx + SLOT - 4, sy + SLOT - 4, outline="#e3e3e3")
+            if not (self.drag and self.drag["i"] == i):
+                col = "#c8c8c8" if i in done else p["color"]
+                self.draw_piece(self.shape[i], col, cf=self.tray_center(i), k=TS / CELL)
+            cv.create_text(sx + SLOT / 2 - 1, sy + SLOT - 12, fill="#444",
+                           text=p["name"] + (" \u2713" if i in done else ""),
+                           font=("Arial", 8))
 
     def refresh(self):
-        setup = not self.locked and not self.solving
-        for b in (self.btn_rot, self.btn_flip, self.btn_clear, self.btn_lock):
-            b.config(state="normal" if setup else "disabled")
+        idle = not self.solving
+        for b in (self.btn_clear, self.btn_hint, self.btn_all):
+            b.config(state="normal" if idle else "disabled")
+        can_undo = idle and any(i in self.placed and i not in self.fixed
+                                for i in self.history)
+        self.btn_undo.config(state="normal" if can_undo else "disabled")
         self.card_box.config(state="disabled" if self.solving else "readonly")
         self.layout_box.config(state="disabled" if self.solving else "readonly")
-        locked = self.locked and not self.solving
-        total = len(self.solution)
-        self.btn_hint.config(state="normal" if locked and self.hints < total else "disabled")
-        self.btn_all.config(state="normal" if locked and self.hints < total else "disabled")
-        for b in (self.btn_undo, self.btn_reset):
-            b.config(state="normal" if locked and self.hints > 0 else "disabled")
-        for b in (self.btn_other, self.btn_edit):
-            b.config(state="normal" if locked else "disabled")
-        self.why.config(text=self.steps[self.hints - 1]["text"]
-                        if locked and self.hints else "")
-        self.draw_palette()
+        self.why.config(text=self.hint_steps[-1]["text"] if self.hint_steps else "")
         self.redraw()
 
-    # ---------------------------------------------------- setup input
-    def select(self, i):
-        self.selected = i
-        self.cur = normalize(self.pieces[i]["cells"])
+    # ------------------------------------------- dragging / placing pieces
+    def track(self, e):
+        self.mx, self.my = e.x, e.y
 
-    def select_next(self):
-        n = len(self.pieces)
-        for k in range(1, n + 1):
-            j = (self.selected + k) % n
-            if j not in self.placed:
-                self.select(j)
-                return
+    def hit_piece(self, x, y):
+        """(piece index, handle ball, 'board' | 'tray') under the mouse, or None.
+        Pieces that belong to the loaded card are fixed and are never returned."""
+        cell = self.cell_at(x, y)
+        if cell is not None:
+            for i, cells in self.placed.items():
+                if i not in self.fixed and cell in cells:
+                    mr = min(r for r, c in cells)
+                    mc = min(c for r, c in cells)
+                    return i, (cell[0] - mr, cell[1] - mc), "board"
+        for i in range(len(self.pieces)):
+            if i in self.placed:
+                continue
+            cf = self.tray_center(i)
+            for r, c in self.shape[i]:
+                cx, cy = cf(r, c)
+                if abs(x - cx) <= TS / 2 and abs(y - cy) <= TS / 2:
+                    return i, (r, c), "tray"
+        return None
 
+    def ghost(self):
+        """Cells the dragged piece would occupy if dropped now, and if that is legal."""
+        d = self.drag
+        hover = self.cell_at(self.mx, self.my)
+        if not d or hover is None:
+            return None, False
+        ar, ac = d["anchor"]
+        cells = [(hover[0] + r - ar, hover[1] + c - ac) for r, c in self.shape[d["i"]]]
+        taken = {p for cs in self.placed.values() for p in cs}
+        ok = all((r, c) in self.layout.cells and (r, c) not in taken for r, c in cells)
+        return cells, ok
+
+    def remember(self, i):
+        if i in self.history:
+            self.history.remove(i)
+        self.history.append(i)
+
+    def on_press(self, e):
+        self.track(e)
+        if self.solving:
+            return
+        hit = self.hit_piece(e.x, e.y)
+        if not hit:
+            return
+        i, anchor, src = hit
+        if src == "board":
+            self.shape[i] = normalize(self.placed.pop(i))
+            if i in self.history:
+                self.history.remove(i)
+        self.hint_steps = []          # the board is changing - old hints are stale
+        self.drag = {"i": i, "anchor": anchor}
+        self.refresh()
+
+    def on_move(self, e):
+        self.track(e)
+        if self.drag:
+            self.redraw()
+
+    def on_release(self, e):
+        self.track(e)
+        if not self.drag:
+            return
+        cells, ok = self.ghost()
+        i = self.drag["i"]
+        self.drag = None
+        if cells and ok:
+            self.placed[i] = cells
+            self.remember(i)
+            self.set_status(f"Placed the {self.pieces[i]['name']} piece. "
+                            f"{len(self.placed)}/{len(self.pieces)} pieces on the board.")
+        self.refresh()
+        self.check_solved()
+
+    def transform_at(self, x, y, kind):
+        """Rotate / flip the dragged piece, or the piece under (x, y)."""
+        if self.solving:
+            return
+        if self.drag:
+            i = self.drag["i"]
+            self.shape[i], self.drag["anchor"] = transform(
+                self.shape[i], self.drag["anchor"], kind)
+            self.redraw()
+            return
+        hit = self.hit_piece(x, y)
+        if not hit:
+            return
+        i, anchor, src = hit
+        if src == "tray":
+            self.shape[i] = transform(self.shape[i], anchor, kind)[0]
+        else:
+            cells = self.placed[i]
+            mr = min(r for r, c in cells)
+            mc = min(c for r, c in cells)
+            hot = (mr + anchor[0], mc + anchor[1])
+            new, na = transform(normalize(cells), anchor, kind)
+            moved = [(hot[0] - na[0] + r, hot[1] - na[1] + c) for r, c in new]
+            taken = {p for j, cs in self.placed.items() if j != i for p in cs}
+            if all(p in self.layout.cells and p not in taken for p in moved):
+                self.placed[i] = moved
+                self.shape[i] = new
+                self.hint_steps = []
+        self.refresh()
+
+    def on_key(self, e):
+        k = e.keysym.lower()
+        if k == "r":
+            self.transform_at(self.mx, self.my, "rot")
+        elif k == "f":
+            self.transform_at(self.mx, self.my, "flip")
+        elif k == "h":
+            self.hint()
+
+    def undo(self):
+        """Take back the last piece you placed (card pieces stay)."""
+        if self.solving:
+            return
+        while self.history:
+            i = self.history.pop()
+            if i in self.placed and i not in self.fixed:
+                del self.placed[i]
+                self.hint_steps = []
+                self.set_status(f"Removed the {self.pieces[i]['name']} piece.")
+                break
+        self.refresh()
+
+    def reset_card(self):
+        """Start the current puzzle (or an empty free-play board) again."""
+        self.load_card(self.current)
+
+    def set_status(self, text):
+        self.status.config(text=text)
+
+    def check_solved(self):
+        if len(self.placed) < len(self.pieces):
+            return
+        if {p for cs in self.placed.values() for p in cs} != set(self.layout.cells):
+            return
+        self.stop_timer()
+        t = self.timer_label.cget("text")
+        self.set_status(f"Solved! Time {t}.")
+        messagebox.showinfo("Solved!", f"Congratulations - puzzle solved!\nTime: {t}")
+
+    # ---------------------------------------------------- layout / cards
     def change_layout(self, idx):
         layout = LAYOUTS[idx]
         if self.solving or layout is self.layout:
@@ -866,32 +1041,37 @@ class App:
         self.layout = layout
         self.layout_var.set(layout.name)
         self.table = build_placements(self.pieces)
-        self.placed = {}
-        self.locked = False
-        self.solution, self.steps, self.hints = [], [], 0
-        self.hover = None
-        w, h = layout.size()
-        self.cv.config(width=w, height=h)
-        self.card_box.config(values=[c[0] for c in layout.cards])
-        self.card_var.set("Load a puzzle card...")
-        self.select(0)
-        self.set_status(f"{layout.name} board - load a card from the dropdown or place pieces.")
-        self.refresh()
+        cw, ch = self.canvas_size()
+        self.cv.config(width=cw, height=ch)
+        self.place_panel()
+        self.card_box.config(values=[FREE] + [c[0] for c in layout.cards])
+        self.load_card(0)
 
     def load_card(self, idx):
+        """idx 0 = free play (empty board), idx n = puzzle card n."""
         if self.solving or idx < 0:
             return
-        label, rows = self.layout.cards[idx]
-        if self.locked:
-            self.unlock()
-        found, bad = card_pieces(rows, self.pieces)
-        self.placed = found
-        self.hover = None
-        free = [i for i in range(len(self.pieces)) if i not in found]
-        if free:
-            self.select(free[0])
-        self.set_status(f"Card {label} loaded: {len(found)} pieces placed, {len(free)} to go. "
-                        "Press 'Lock setup & solve'.")
+        self.current = idx
+        self.hint_steps = []
+        self.drag = None
+        self.history = []
+        self.shape = [normalize(p["cells"]) for p in self.pieces]
+        bad = []
+        if idx == 0:
+            self.placed, self.fixed = {}, set()
+            self.card_var.set(FREE)
+            self.set_status(f"Free play on the {self.layout.name} board - drag pieces onto "
+                            "it. Press Hint whenever you want help.")
+        else:
+            label, rows = self.layout.cards[idx - 1]
+            found, bad = card_pieces(rows, self.pieces)
+            self.placed, self.fixed = found, set(found)
+            for i, cells in found.items():
+                self.shape[i] = normalize(cells)
+            self.card_var.set(label)
+            self.set_status(f"Puzzle {label}: place the {len(self.pieces) - len(found)} "
+                            "remaining pieces. Press Hint if you get stuck.")
+        self.reset_timer()
         self.refresh()
         if bad:
             messagebox.showwarning(
@@ -899,85 +1079,20 @@ class App:
                 "These pieces on the card don't match your current piece shapes: "
                 + ", ".join(bad) + ".\nCheck Pieces > Edit piece shapes...")
 
-    def on_palette(self, i):
-        if self.locked or self.solving:
-            return
-        self.placed.pop(i, None)
-        self.select(i)
-        self.refresh()
+    # ------------------------------------------------------- hints
+    def hint(self):
+        """Show one more step of the solution (each press reveals the next one)."""
+        self.request_hint(len(self.hint_steps) + 1)
 
-    def ghost(self):
-        if self.hover is None:
-            return None, False
-        hr, hc = self.hover
-        ar, ac = anchor_of(self.cur)
-        cells = [(hr + r - ar, hc + c - ac) for r, c in self.cur]
-        taken = {p for cs in self.placed.values() for p in cs}
-        ok = all((r, c) in self.layout.cells and (r, c) not in taken for r, c in cells)
-        return cells, ok
+    def show_all(self):
+        """Show every remaining piece, numbered in the order to place them."""
+        self.request_hint(None)
 
-    def set_hover(self, cell):
-        if cell != self.hover:
-            self.hover = cell
-            if not self.locked and not self.solving:
-                self.redraw()
-
-    def on_motion(self, e):
-        self.set_hover(self.cell_at(e.x, e.y))
-
-    def on_click(self, e):
-        if self.locked or self.solving:
-            return
-        self.hover = self.cell_at(e.x, e.y)
-        cells, ok = self.ghost()
-        if cells and ok:
-            self.placed[self.selected] = cells
-            self.select_next()
-            self.set_status(f"Placed. {len(self.placed)} piece(s) on the board.")
-            self.refresh()
-
-    def on_right(self, e):
-        if self.locked or self.solving:
-            return
-        cell = self.cell_at(e.x, e.y)
-        for i, cells in list(self.placed.items()):
-            if cell in cells:
-                del self.placed[i]
-                self.select(i)
-                self.refresh()
-                return
-
-    def do_rotate(self):
-        if not self.locked and not self.solving:
-            self.cur = rotate(self.cur)
-            self.redraw()
-
-    def do_flip(self):
-        if not self.locked and not self.solving:
-            self.cur = flip(self.cur)
-            self.redraw()
-
-    def clear_board(self):
-        self.placed.clear()
-        self.select(0)
-        self.set_status("Board cleared.")
-        self.refresh()
-
-    def on_key(self, e):
-        k = e.keysym.lower()
-        if k == "r":
-            self.do_rotate()
-        elif k == "f":
-            self.do_flip()
-        elif k == "h":
-            self.hint()
-
-    def set_status(self, text):
-        self.status.config(text=text)
-
-    # ------------------------------------------------- lock & solve
-    def lock_and_solve(self, randomize=False):
+    def request_hint(self, limit):
         if self.solving:
+            return
+        if len(self.placed) == len(self.pieces):
+            self.set_status("Every piece is already on the board.")
             return
         filled = 0
         for cells in self.placed.values():
@@ -985,100 +1100,50 @@ class App:
                 filled |= bit(r, c)
         rem = sum(1 << i for i in range(len(self.pieces)) if i not in self.placed)
         sizes = [len(p["cells"]) for p in self.pieces]
+        names = [p["name"] for p in self.pieces]
         table = self.table
-        rng = random.Random() if randomize else None
         deadline = time.time() + 90
         self.cancel.clear()
         self.solving = True
-        self.set_status("Solving... (this normally takes well under a second)")
+        self.set_status("Thinking... (normally well under a second)")
         self.refresh()
 
-        names = [p["name"] for p in self.pieces]
-
         def work():
-            res, steps, err = None, [], None
+            steps, err = None, None
             try:
-                res = solve(table, sizes, filled, rem, rng, deadline, self.cancel)
+                res = solve(table, sizes, filled, rem, None, deadline, self.cancel)
                 if res:
-                    steps = plan_hints(table, sizes, filled, rem, res, names, self.cancel)
+                    steps = plan_hints(table, sizes, filled, rem, res, names,
+                                       self.cancel, limit)
             except Cancelled:
-                err, res = "cancel", None
+                err = "cancel"
             except TimeoutError:
-                err, res = "timeout", None
-            self.root.after(0, lambda: self.solve_done(res, steps, err))
+                err = "timeout"
+            self.root.after(0, lambda: self.hint_done(steps, err, limit))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def solve_done(self, res, steps, err):
+    def hint_done(self, steps, err, limit):
         self.solving = False
         if err == "timeout":
+            self.set_status("No hint found in time.")
             messagebox.showwarning("Solver", "The solver gave up after 90 s.")
-        elif res is None and err is None:
+        elif err is None and steps is None:
+            self.set_status("These pieces can't all fit together - press Undo to take "
+                            "back the last piece(s), then ask again.")
             messagebox.showwarning(
                 "No solution",
-                "This setup cannot be completed.\n\nCheck that the pieces on the board "
-                "match your puzzle card. If the card is right, one of the piece shapes "
-                "may differ from your physical set (Pieces > Edit piece shapes...).")
-        if res is None:
-            if self.locked:      # "another solution" failed, keep the old one
-                self.set_status("Kept the previous solution.")
+                "The pieces on the board can't be completed.\n\nPress Undo to take back "
+                "your last piece(s) and ask for a hint again.")
+        elif steps:
+            self.hint_steps = steps
+            if limit is None:
+                self.set_status(f"Solution: {len(steps)} piece(s) left, numbered in the "
+                                "order to place them.")
             else:
-                self.set_status("No solution found - fix the setup and try again.")
-            self.refresh()
-            return
-        self.locked = True
-        self.steps = steps
-        self.solution = [(st["piece"], st["cells"]) for st in steps]
-        self.hints = 0
-        self.hover = None
-        self.set_status(f"Setup locked. {len(self.solution)} piece(s) left to place - press Hint.")
-        self.refresh()
-
-    def unlock(self):
-        self.locked = False
-        self.solution = []
-        self.steps = []
-        self.hints = 0
-        self.set_status("Setup unlocked - edit the board, then lock again.")
-        self.refresh()
-
-    def another(self):
-        self.lock_and_solve(randomize=True)
-
-    # ------------------------------------------------------- hints
-    def hint(self):
-        if not self.locked or self.solving or self.hints >= len(self.solution):
-            return
-        self.hints += 1
-        self.hint_status()
-        self.refresh()
-
-    def hint_status(self):
-        total = len(self.solution)
-        if self.hints == 0:
-            self.set_status(f"Setup locked. {total} piece(s) left to place - press Hint.")
-        elif self.hints >= total:
-            self.set_status(f"Hint {total}/{total}: the {self.pieces[self.solution[-1][0]]['name']} "
-                            "piece completes the puzzle!")
-        else:
-            name = self.pieces[self.solution[self.hints - 1][0]]["name"]
-            self.set_status(f"Hint {self.hints}/{total}: place the {name} piece "
-                            "(gold outline).")
-
-    def undo_hint(self):
-        if self.hints:
-            self.hints -= 1
-            self.hint_status()
-            self.refresh()
-
-    def reset_hints(self):
-        self.hints = 0
-        self.hint_status()
-        self.refresh()
-
-    def show_all(self):
-        self.hints = len(self.solution)
-        self.hint_status()
+                name = self.pieces[steps[-1]["piece"]]["name"]
+                self.set_status(f"Hint {len(steps)}: place the {name} piece (gold outline). "
+                                "Press Hint again for the next one.")
         self.refresh()
 
     # ---------------------------------------------------- piece editor
@@ -1092,12 +1157,7 @@ class App:
             p["cells"] = normalize(cells)
         save_pieces(self.pieces)
         self.table = build_placements(self.pieces)
-        self.placed.clear()
-        self.locked = False
-        self.solution = []
-        self.steps = []
-        self.hints = 0
-        self.select(0)
+        self.load_card(0)
         total = sum(len(p["cells"]) for p in self.pieces)
         if total != len(LAYOUT.cells):
             messagebox.showwarning(
@@ -1105,7 +1165,6 @@ class App:
                                f"{len(LAYOUT.cells)}. A complete solution is impossible until "
                                "the totals match.")
         self.set_status("Piece shapes updated - board cleared.")
-        self.refresh()
 
 
 class PieceEditor(tk.Toplevel):
