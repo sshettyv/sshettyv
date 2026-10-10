@@ -1,0 +1,1194 @@
+#!/usr/bin/env python3
+"""
+IQ Puzzler Pro - hint helper (straight 11 x 5 board and diagonal board)
+
+1. SET UP : choose the board layout (straight or diagonal), then load a puzzle card
+           from the dropdown (straight cards 1-16, diagonal cards 41-80), or
+           pick a piece, rotate/flip it and click on the board to place it.  Right-click a piece to remove it.
+2. LOCK   : "Lock & solve" freezes the setup and finds a full solution.
+3. HINTS  : every press of "Hint" reveals one more piece of the solution, most
+           forced piece first, with a plain-language reason for each one.
+
+Only the Python standard library is used (Python 3.8+ with tkinter).
+Run:   python iq_puzzler_helper.py
+
+The piece shapes in DEFAULT_PIECES were read from the game's solution picture.
+If one is ever wrong, fix it under Pieces > Edit piece shapes...; edits are saved
+next to this script in iq_puzzler_pieces_v2.json.
+"""
+import json
+import math
+import os
+import random
+import threading
+import time
+import tkinter as tk
+from tkinter import messagebox, ttk
+
+ROWS, COLS = 5, 11   # bounding box of the active board layout (see use_layout)
+FULL = 0             # bit mask of every hole on the active board layout
+LAYOUT = None
+CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      "iq_puzzler_pieces_v2.json")
+
+# name, colour, shape ("/" separates rows, X = ball)
+DEFAULT_PIECES = [
+    # read from the solution picture of the real game
+    ("Yellow",    "#ffdd00", "XXXX/.X.."),     # Y  (5)
+    ("Pink",      "#f472b0", "..XX/XXX."),     # N  (5)
+    ("Teal",      "#7fcdbf", ".XX/XXX"),       # P  (5)
+    ("Lime",      "#8dc63f", "XXX/X.X"),       # U  (5)
+    ("Purple",    "#862a94", "X../XX./.XX"),   # W  (5)
+    ("Dark red",  "#b5262b", "XX./.XX"),       # S  (4)
+    ("Cyan",      "#00aeef", "XXX/..X/..X"),   # V  (5)
+    ("Orange",    "#f7941d", "..X/XXX/.X."),   # F  (5)
+    ("Green",     "#009a62", ".X/XX/.X"),      # T  (4)
+    ("Pale blue", "#8fd8f8", "X./XX"),         # V  (3)
+    ("Red",       "#ed1c24", "...X/XXXX"),     # L  (5)
+    ("Blue",      "#0066b3", "X../XXX"),       # L  (4)
+]
+
+
+# Puzzle cards from the Smart Games "Starter / Junior / Expert / Master" booklet.
+# Each card = 5 rows of 11 characters; "." is an empty hole.  Letters:
+LETTERS = {"Y": "Yellow", "K": "Pink", "T": "Teal", "L": "Lime", "P": "Purple",
+           "D": "Dark red", "C": "Cyan", "O": "Orange", "G": "Green",
+           "W": "Pale blue", "R": "Red", "B": "Blue"}
+
+STRAIGHT_CARDS = [
+    ("1 - Starter", ["PGGGDLLLTTT", "PPGDDLWL.TT", "CPPDRWW....", "CRRRRKK....", "CCCKKK....."]),
+    ("2 - Starter", ["CCCDPPYYYYB", "C..DDPPYBBB", "C...DGPWWLL", ".....GGWKKL", ".....GKKKLL"]),
+    ("3 - Starter", ["RRBBBCCCTTT", "R...BDKCTTO", "R...DDKCOOO", "R...DGKKLOL", "....GGGKLLL"]),
+    ("4 - Starter", ["GGGPOOKKKWW", "CGPPYOO.KKW", "CPPYYOT....", "CCCRYTT....", "RRRRYTT...."]),
+    ("5 - Junior",  ["YYYYKKTT...", "PYKKKTTT...", "PPDDCCC....", "WPPDDRC....", "WWRRRRC...."]),
+    ("6 - Junior",  ["YYYYPPW....", "BBYPPWW....", "CBDPLLO....", "CBDDLOO....", "CCCDLLOO..."]),
+    ("7 - Junior",  ["TTTLLLB....", "TTOLYLB....", "WWOOYBB....", "WOORYYG....", "RRRRYGGG..."]),
+    ("8 - Junior",  ["YGGGWW.....", "YYGTTW.....", "YBCTT......", "YBCTDD.....", "BBCCCDD...."]),
+    ("9 - Expert",  ["YYYYG......", "WWYGG......", "WBBBG......", "LBLTT......", "LLLTTT....."]),
+    ("10 - Expert", ["..WWRRPPKKK", "...WRPPKKOO", "....RP..OOB", "....R....OB", ".........BB"]),
+    ("11 - Expert", ["LLLTTGGGP..", "L.LTTTGPP..", "....DDPP...", ".....DD....", "..........."]),
+    ("12 - Expert", ["GTTTYYYY...", "GGTT.YLL...", "G.....L....", "......LL...", "..........."]),
+    ("13 - Master", ["......TTTWW", "......TT..W", ".....GGG...", "......G....", "..........."]),
+    ("14 - Master", ["......WWBBB", ".......W..B", "......DD...", ".....DD....", "..........."]),
+    ("15 - Master", ["...KKDD....", ".KKKDDW....", ".....WW....", "...........", "..........."]),
+    ("16 - Master", ["....TTTYYYY", "....TTR.Y..", "...RRRR....", "...........", "..........."]),
+]
+
+
+def card_pieces(rows, pieces):
+    """Return ({piece index: cells}, [names of pieces whose shape doesn't match])."""
+    by_name = {p["name"]: i for i, p in enumerate(pieces)}
+    found = {}
+    for r, row in enumerate(rows):
+        for c, ch in enumerate(row):
+            if ch in LETTERS:
+                found.setdefault(by_name[LETTERS[ch]], []).append((r, c))
+    bad = [pieces[i]["name"] for i, cs in found.items()
+           if normalize(cs) not in orientations(pieces[i]["cells"])]
+    return found, bad
+
+
+# Diagonal board: the same 55 balls, but the board is shown turned 45 degrees.  Every
+# hole is stored as a square-lattice cell (row, col); neighbours are still +-1 in row
+# or col, which on screen are the diagonal neighbours of the card pictures.
+DIAG_CARDS = [
+    ("41 - Starter", [" ..WW    ", "...WD    ", "....DDK  ", "...BGDK  ", "...BGGKKY", "  BBGRRKY", "  CCCRTYY", "    CRTTY", "    CRTT "]),
+    ("42 - Starter", [" ....    ", ".....    ", ".....PP  ", "L.LBPPY  ", "LLLBPYYYY", "  BBGGGDD", "  CCCGDDW", "    CTTWW", "    CTTT "]),
+    ("43 - Starter", [" ....    ", ".....    ", "W...KKK  ", "WW.KKDD  ", "RRRRPPDDY", "  LRLPPYY", "  LLLOPCY", "    OOOCY", "    OCCC "]),
+    ("44 - Starter", [" Y...    ", "YY...    ", "BY....D  ", "BY...DD  ", "BBTOODCCC", "  TTOOPPC", "  TTOPPGC", "    LPLGG", "    LLLG "]),
+    ("45 - Starter", [" BBPP    ", "CBPPO    ", "CBPDOOO  ", "CCCDDOG  ", "RRRRDGGGY", "  LRL..YY", "  LLL...Y", "    ....Y", "    .... "]),
+    ("46 - Starter", [" ....    ", ".....    ", "G...LLL  ", "GG.OLKL  ", "GOOOPKKTT", "  OPPBKTT", "  PPCBKTD", "    CBBDD", "    CCCD "]),
+    ("47 - Junior", [" PPTT    ", "PPTTT    ", "PKKKORR  ", "KKOOOR.  ", "CCCODR...", "  CDDR...", "  CDLLL..", "    LYL..", "    YYYY "]),
+    ("48 - Junior", [" YCCC    ", "YYYYC    ", "LL..CRR  ", "L....RG  ", "LL...RGGP", "  ...RGPP", "  ...WPPD", "    WWBDD", "    BBBD "]),
+    ("49 - Junior", [" RRRR    ", "CCCPR    ", "TTCPPWW  ", "TTCOPPW  ", "TOOO.....", "  OG.....", "  GGG....", "    B....", "    BBB. "]),
+    ("50 - Junior", [" ....    ", "....O    ", "....OOK  ", "...OOKK  ", "..LLLKRRD", "  LGLKRDD", "  GGGTRDP", "    TTRPP", "    TTPP "]),
+    ("51 - Junior", [" YYYY    ", "RRWYO    ", "R.WWOOO  ", "R....OG  ", "R.....GGP", "  ....GPP", "  ....PPD", "    L.LDD", "    LLLD "]),
+    ("52 - Junior", [" LL..    ", "BL...    ", "BLL....  ", "BBKK...  ", "KKKPP...C", "  PPG...C", "  PGGOCCC", "    GOODD", "    OODD "]),
+    ("53 - Expert", [" ....    ", ".....    ", "......D  ", "..B.WDD  ", "..BWWDTTT", "  BBPPTTG", "  CCCPPGG", "    CLPLG", "    CLLL "]),
+    ("54 - Expert", [" ....    ", "RR...    ", "R......  ", "R.....O  ", "RKKKOOOPP", "  WKKOPPG", "  WWLLPGG", "    LTTTG", "    LLTT "]),
+    ("55 - Expert", [" ....    ", ".....    ", ".....BB  ", ".....BK  ", "CCCWWBKTT", "  CWGKKTT", "  CGGKPOT", "    GPPOO", "    PPOO "]),
+    ("56 - Expert", [" ....    ", ".....    ", ".......  ", "......D  ", ".WWO.DDPP", "  WOODPPG", "  OOLLPGG", "    LTTTG", "    LLTT "]),
+    ("57 - Expert", [" WWTT    ", "YWTTT    ", "Y...RRK  ", "YY..RKK  ", "Y...RKLLL", "  ..RKLDL", "  .....DD", "    ....D", "    .... "]),
+    ("58 - Expert", [" KKKO    ", "KK.OO    ", "....OOB  ", "....BBB  ", "......RRD", "  ....RDD", "  ...TRDP", "    TTRPP", "    TTPP "]),
+    ("59 - Master", [" RRRR    ", "....R    ", "...GWWB  ", "...GGWB  ", "...G..BBY", "  ....KYY", "  ....KKY", "    ...KY", "    ...K "]),
+    ("60 - Master", [" ....    ", ".....    ", "G......  ", "GGDDTT.  ", "GDDTTT...", "  RRRR...", "  CCCR...", "    CB...", "    CBBB "]),
+    ("61 - Master", [" ....    ", ".....    ", "C......  ", "C..K...  ", "CCCK....B", "  KKG...B", "  KGG.PBB", "    GPPDD", "    PPDD "]),
+    ("62 - Master", [" TTTK    ", "..TTK    ", "...KKPP  ", "...KPPD  ", "...LPLDDY", "  .LLL.DY", "  .....YY", "    ....Y", "    .... "]),
+    ("63 - Master", [" ....    ", ".....    ", ".......  ", "..KK...  ", "KKKO....P", "  OOO..PP", "  OWW.PPB", "    WYBBB", "    YYYY "]),
+    ("64 - Master", [" TTTC    ", "DTTWC    ", "DDWWCCC  ", "LDLB...  ", "LLLB.....", "  BB.....", "  .......", "    .....", "    .... "]),
+    ("65 - Master", [" ....    ", ".....    ", "..RRRRC  ", ".....RC  ", "......CCC", "  ....LLL", "  ....LGL", "    ..BGG", "    BBBG "]),
+    ("66 - Master", [" ....    ", ".....    ", ".......  ", ".......  ", ".......WW", "  ...BKDW", "  .BBBKDD", "    TTKKD", "    TTTK "]),
+    ("67 - Master", [" ....    ", ".....    ", "....YLL  ", "..YYYYL  ", ".....LLTT", "  ....TTT", "  ...RRRR", "    ....R", "    .... "]),
+    ("68 - Master", [" ....    ", ".....    ", ".......  ", "....LL.  ", "....L....", "  .PLL...", "  .PP..TT", "    PPBTT", "    BBBT "]),
+    ("69 - Master", [" ....    ", "....C    ", "....CWW  ", "..CCCWB  ", "......BBB", "  ......K", "  ......K", "    ...KK", "    ...K "]),
+    ("70 - Master", [" ....    ", ".....    ", ".......  ", "...PP..  ", "..PP.....", "  PW.....", "  WWC...D", "    C..DD", "    CCCD "]),
+    ("71 - Wizard", [" ....    ", ".....    ", ".......  ", ".......  ", ".........", "  .YYYY..", "  .DDY...", "    DDBWW", "    BBBW "]),
+    ("72 - Wizard", [" ..RR    ", "...RG    ", "...RGGP  ", "...RGPP  ", "....PP...", "  ..WW...", "  ...W...", "    .....", "    .... "]),
+    ("73 - Wizard", [" ..TT    ", "...TT    ", "....TRR  ", "...WWR.  ", "....WR...", "  ...R...", "  .......", "    .....", "    .... "]),
+    ("74 - Wizard", [" ..LL    ", "....L    ", "...LLBB  ", "......B  ", "......B..", "  ..YYYY.", "  ...Y...", "    .....", "    .... "]),
+    ("75 - Wizard", [" ....    ", "....C    ", "....CK.  ", "..CCCK.  ", "....KK...", "  ..KD...", "  ...DD..", "    ..D..", "    .... "]),
+    ("76 - Wizard", [" ....    ", ".....    ", ".......  ", "....W..  ", "...WW....", "  TT.....", "  TTT....", "    B....", "    BBB. "]),
+    ("77 - Wizard", [" ....    ", ".....    ", "..TTTBB  ", "..TT..B  ", "......B..", "  .......", "  .......", "    .....", "    .... "]),
+    ("78 - Wizard", [" ....    ", ".....    ", "...RRRR  ", ".....TR  ", ".....TT..", "  ...TT..", "  .......", "    .....", "    .... "]),
+    ("79 - Wizard", [" ....    ", ".....    ", ".......  ", "...DD..  ", "....DD...", "  ..G....", "  .GG....", "    G....", "    .... "]),
+    ("80 - Wizard", [" ....    ", ".....    ", ".......  ", ".O...C.  ", ".OOO.C...", "  OCCC...", "  .......", "    .....", "    .... "]),
+]
+
+DIAG_ROWS = {0: [3, 7, 11], 1: list(range(2, 13, 2)), 2: list(range(1, 14, 2)),
+             3: list(range(0, 15, 2)), 4: list(range(1, 14, 2)), 5: list(range(0, 15, 2)),
+             6: list(range(1, 14, 2)), 7: list(range(2, 13, 2)), 8: [3, 7, 11]}
+DIAG_CELLS = [((i + j - 1) // 2 - 1, (i - j + 1) // 2 + 2)
+              for j, line in DIAG_ROWS.items() for i in line]
+
+
+class Layout:
+    """A board shape: which (row, col) cells exist, how to draw them, its cards."""
+
+    def __init__(self, name, kind, rows, cols, cells, cards):
+        self.name, self.kind, self.rows, self.cols = name, kind, rows, cols
+        self.cells = frozenset(cells)
+        self.cards = cards
+
+    def center(self, r, c):
+        if self.kind == "diag":
+            s = CELL / math.sqrt(2)
+            return (PAD + CELL / 2 + (r + c - 1) * s, PAD + CELL / 2 + (r - c + 4) * s)
+        return PAD + c * CELL + CELL / 2, PAD + r * CELL + CELL / 2
+
+    def size(self):
+        if self.kind == "diag":
+            s = CELL / math.sqrt(2)
+            return int(14 * s + CELL + 2 * PAD), int(8 * s + CELL + 2 * PAD)
+        return self.cols * CELL + 2 * PAD, self.rows * CELL + 2 * PAD
+
+    def cell_at(self, x, y):
+        if self.kind == "diag":
+            best = None
+            for r, c in self.cells:
+                cx, cy = self.center(r, c)
+                d = (x - cx) ** 2 + (y - cy) ** 2
+                if best is None or d < best[0]:
+                    best = (d, (r, c))
+            return best[1] if best and best[0] <= (CELL * 0.56) ** 2 else None
+        c, r = int((x - PAD) // CELL), int((y - PAD) // CELL)
+        if 0 <= r < self.rows and 0 <= c < self.cols and x >= PAD and y >= PAD:
+            return r, c
+        return None
+
+    def describe(self, rc):
+        if self.kind == "diag":
+            return "The ringed square"
+        return f"The square at row {rc[0] + 1}, column {rc[1] + 1}"
+
+
+STRAIGHT = Layout("Straight (11 x 5)", "grid", 5, 11,
+                  [(r, c) for r in range(5) for c in range(11)], STRAIGHT_CARDS)
+DIAGONAL = Layout("Diagonal", "diag", 9, 9, DIAG_CELLS, DIAG_CARDS)
+LAYOUTS = [STRAIGHT, DIAGONAL]
+
+
+# --------------------------------------------------------------------------
+# geometry helpers
+# --------------------------------------------------------------------------
+def parse(art):
+    return [(r, c) for r, line in enumerate(art.split("/"))
+            for c, ch in enumerate(line) if ch == "X"]
+
+
+def normalize(cells):
+    mr = min(r for r, c in cells)
+    mc = min(c for r, c in cells)
+    return tuple(sorted((r - mr, c - mc) for r, c in cells))
+
+
+def rotate(cells):
+    return normalize([(c, -r) for r, c in cells])
+
+
+def flip(cells):
+    return normalize([(r, -c) for r, c in cells])
+
+
+def orientations(cells):
+    """All distinct rotations / reflections of a shape."""
+    seen, out = set(), []
+    cur = list(cells)
+    for _ in range(2):
+        for _ in range(4):
+            cur = [(c, -r) for r, c in cur]
+            n = normalize(cur)
+            if n not in seen:
+                seen.add(n)
+                out.append(n)
+        cur = [(r, -c) for r, c in cur]
+    return out
+
+
+def is_connected(cells):
+    cells = set(cells)
+    if not cells:
+        return False
+    stack = [next(iter(cells))]
+    seen = {stack[0]}
+    while stack:
+        r, c = stack.pop()
+        for d in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            n = (r + d[0], c + d[1])
+            if n in cells and n not in seen:
+                seen.add(n)
+                stack.append(n)
+    return len(seen) == len(cells)
+
+
+def anchor_of(cells):
+    """Cell nearest the middle of the shape - used as the mouse 'handle'."""
+    mr = max(r for r, c in cells) / 2
+    mc = max(c for r, c in cells) / 2
+    return min(cells, key=lambda p: ((p[0] - mr) ** 2 + (p[1] - mc) ** 2, p))
+
+
+def lum(color):
+    r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
+    return 0.299 * r + 0.587 * g + 0.114 * b
+
+
+# --------------------------------------------------------------------------
+# solver  (bitboard, column-major: bit = col * ROWS + row)
+# --------------------------------------------------------------------------
+def bit(r, c):
+    return 1 << (c * ROWS + r)
+
+
+ROW0 = ROWL = NOT_ROW0 = NOT_ROWL = 0
+
+
+def use_layout(layout):
+    """Switch the solver to another board shape."""
+    global ROWS, COLS, FULL, ROW0, ROWL, NOT_ROW0, NOT_ROWL, LAYOUT
+    LAYOUT = layout
+    ROWS, COLS = layout.rows, layout.cols
+    FULL = 0
+    for r, c in layout.cells:
+        FULL |= 1 << (c * ROWS + r)
+    ROW0 = sum(1 << (c * ROWS) for c in range(COLS))
+    ROWL = sum(1 << (c * ROWS + ROWS - 1) for c in range(COLS))
+    NOT_ROW0 = FULL & ~ROW0
+    NOT_ROWL = FULL & ~ROWL
+
+
+use_layout(STRAIGHT)
+
+
+def popcount(x):
+    return bin(x).count("1")
+
+
+def mask_cells(m):
+    out = []
+    while m:
+        b = m & -m
+        i = b.bit_length() - 1
+        out.append((i % ROWS, i // ROWS))
+        m ^= b
+    return out
+
+
+def flood(seed, empty):
+    region = seed
+    while True:
+        grown = (region | ((region << 1) & NOT_ROW0) | ((region >> 1) & NOT_ROWL)
+                 | (region << ROWS) | (region >> ROWS)) & empty
+        if grown == region:
+            return region
+        region = grown
+
+
+def build_placements(pieces):
+    """table[piece] = {lowest_bit: [masks of every placement starting there]}"""
+    table = []
+    for p in pieces:
+        by_low = {}
+        for o in orientations(p["cells"]):
+            h = max(r for r, c in o) + 1
+            w = max(c for r, c in o) + 1
+            for r0 in range(ROWS - h + 1):
+                for c0 in range(COLS - w + 1):
+                    m = 0
+                    for r, c in o:
+                        m |= bit(r0 + r, c0 + c)
+                    if m & ~FULL:          # sticks out of the board shape
+                        continue
+                    by_low.setdefault(m & -m, []).append(m)
+        table.append(by_low)
+    return table
+
+
+class Cancelled(Exception):
+    pass
+
+
+def bits_of(m):
+    while m:
+        b = m & -m
+        yield b
+        m ^= b
+
+
+def make_region_check(sizes):
+    """Return ok(filled, remaining_mask): every empty pocket must be fillable."""
+    n = len(sizes)
+    reach_cache = {}
+
+    def reach(rem):
+        v = reach_cache.get(rem)
+        if v is None:
+            v = 1
+            for i in range(n):
+                if rem >> i & 1:
+                    v |= v << sizes[i]
+            reach_cache[rem] = v
+        return v
+
+    def regions_ok(f, rem):
+        r = reach(rem)
+        empty = FULL & ~f
+        while empty:
+            reg = flood(empty & -empty, empty)
+            if not (r >> popcount(reg)) & 1:
+                return False
+            empty &= ~reg
+        return True
+
+    return regions_ok
+
+
+def solve(table, sizes, filled, rem_mask, rng=None, deadline=None, cancel=None):
+    """Return [(piece_index, mask), ...] in placement order, or None."""
+    n = len(sizes)
+    regions_ok = make_region_check(sizes)
+
+    if popcount(FULL & ~filled) != sum(sizes[i] for i in range(n) if rem_mask >> i & 1):
+        return None
+    if rem_mask and not regions_ok(filled, rem_mask):
+        return None
+
+    nodes = 0
+    stack = []
+
+    def rec(f, rem):
+        nonlocal nodes
+        if rem == 0:
+            return f == FULL
+        nodes += 1
+        if nodes & 2047 == 0:
+            if cancel is not None and cancel.is_set():
+                raise Cancelled()
+            if deadline is not None and time.time() > deadline:
+                raise TimeoutError()
+        empty = FULL & ~f
+        if not empty:
+            return False
+        low = empty & -empty
+        ids = [i for i in range(n) if rem >> i & 1]
+        if rng:
+            rng.shuffle(ids)
+        for i in ids:
+            masks = table[i].get(low)
+            if not masks:
+                continue
+            if rng:
+                masks = rng.sample(masks, len(masks))
+            for m in masks:
+                if m & f:
+                    continue
+                nf = f | m
+                nrem = rem & ~(1 << i)
+                if nrem and not regions_ok(nf, nrem):
+                    continue
+                stack.append((i, m))
+                if rec(nf, nrem):
+                    return True
+                stack.pop()
+        return False
+
+    return list(stack) if rec(filled, rem_mask) else None
+
+
+def candidates(table, sizes, filled, rem_mask, ok):
+    """Every legal (piece, mask) on the current board that doesn't create an
+    obviously unfillable pocket."""
+    out = []
+    for i in range(len(sizes)):
+        if not rem_mask >> i & 1:
+            continue
+        nrem = rem_mask & ~(1 << i)
+        for masks in table[i].values():
+            for m in masks:
+                if m & filled:
+                    continue
+                if nrem:
+                    if not ok(filled | m, nrem):
+                        continue
+                elif (filled | m) != FULL:
+                    continue
+                out.append((i, m))
+    return out
+
+
+def plan_hints(table, sizes, filled, rem_mask, solution, names, cancel=None):
+    """Order the solution so the most 'forced' placement comes first and attach a
+    plain-language reason to every step."""
+    ok = make_region_check(sizes)
+    left = list(solution)
+    steps = []
+    f, rem = filled, rem_mask
+    while left:
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
+        cover, per_piece = {}, {}
+        for i, m in candidates(table, sizes, f, rem, ok):
+            per_piece[i] = per_piece.get(i, 0) + 1
+            for b in bits_of(m):
+                cover.setdefault(b, []).append((i, m))
+        best = None
+        for i, m in left:
+            kb = min(bits_of(m), key=lambda b: len(cover.get(b, ())))
+            kc = len(cover.get(kb, ()))
+            pri = 0 if kc == 1 else (1 if per_piece.get(i, 0) == 1 else 2)
+            if best is None or (pri, kc) < best[0]:
+                best = ((pri, kc), i, m, kb)
+        (pri, kc), i, m, kb = best
+        idx = kb.bit_length() - 1
+        key = (idx % ROWS, idx // ROWS)
+        where = LAYOUT.describe(key)
+        name = names[i]
+        alts = []
+        if pri == 0:
+            kind = "cell"
+            text = (f"{where} can only be covered one way: every other piece "
+                    f"and orientation either overlaps something or leaves a gap that can't "
+                    f"be filled. That forces the {name} piece here.")
+        elif pri == 1:
+            kind, key = "piece", None
+            text = (f"The {name} piece has only one legal position left on the board - "
+                    f"anywhere else it overlaps something or leaves an unfillable gap.")
+        else:
+            kind = "elim"
+            others = [x for x in cover[kb] if x != (i, m)]
+            alive = 0
+            for ai, am in others:
+                try:
+                    r2 = solve(table, sizes, f | am, rem & ~(1 << ai), None,
+                               time.time() + 2, cancel)
+                except TimeoutError:
+                    continue
+                if r2 is None:
+                    alts.append(mask_cells(am))
+                else:
+                    alive += 1
+            text = f"{where} can be covered in {len(others) + 1} different ways. "
+            if len(alts) == len(others):
+                lead = ("The only other option leads" if len(others) == 1
+                        else f"The other {len(others)} all lead")
+                text += (f"{lead} to a dead end a few moves later (red outlines), so the "
+                         f"{name} piece has to go here.")
+            else:
+                if alts:
+                    text += (f"{len(alts)} of the other {len(others)} lead to a dead end "
+                             f"(red outlines). ")
+                if alive:
+                    text += ("Other options also work here, so this setup has more than one "
+                             "solution - this hint follows one of them.")
+                else:
+                    text += ("The rest couldn't be ruled out quickly; this hint follows a "
+                             "verified solution.")
+        steps.append({"piece": i, "cells": mask_cells(m), "key": key,
+                      "kind": kind, "alts": alts, "text": text})
+        f |= m
+        rem &= ~(1 << i)
+        left.remove((i, m))
+    return steps
+
+
+# --------------------------------------------------------------------------
+# persistence
+# --------------------------------------------------------------------------
+def load_pieces():
+    pieces = [{"name": n, "color": col, "cells": normalize(parse(a))}
+              for n, col, a in DEFAULT_PIECES]
+    try:
+        with open(CONFIG, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        for p in pieces:
+            raw = data.get(p["name"])
+            if raw:
+                cells = normalize([(int(r), int(c)) for r, c in raw])
+                if is_connected(cells):
+                    p["cells"] = cells
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        pass
+    return pieces
+
+
+def save_pieces(pieces):
+    try:
+        with open(CONFIG, "w", encoding="utf-8") as fh:
+            json.dump({p["name"]: [list(c) for c in p["cells"]] for p in pieces}, fh)
+    except OSError:
+        pass
+
+
+# --------------------------------------------------------------------------
+# GUI
+# --------------------------------------------------------------------------
+CELL, PAD = 58, 24
+BOARD_W, BOARD_H = STRAIGHT.size()
+GOLD = "#ffd54f"
+
+
+class App:
+    def __init__(self, root):
+        self.root = root
+        root.title("IQ Puzzler Pro - hint helper")
+        root.resizable(False, False)
+
+        self.pieces = load_pieces()
+        self.layout = STRAIGHT
+        self.table = build_placements(self.pieces)
+        self.placed = {}          # piece index -> list of (r, c)
+        self.selected = 0
+        self.cur = normalize(self.pieces[0]["cells"])
+        self.hover = None
+        self.locked = False
+        self.solving = False
+        self.solution = []        # [(piece index, cells)]
+        self.hints = 0
+        self.cancel = threading.Event()
+        self.steps = []
+        self.show_why = tk.BooleanVar(value=True)
+
+        # Elapsed-time timer (monotonic clock avoids wall-clock changes).
+        self.timer_running = False
+        self.timer_elapsed = 0.0
+        self.timer_started_at = None
+        self.timer_after_id = None
+
+        self._build_ui()
+        self.refresh()
+        self._update_timer_display()
+
+    # ---------------------------------------------------------------- UI
+    def _build_ui(self):
+        menu = tk.Menu(self.root)
+        pm = tk.Menu(menu, tearoff=0)
+        pm.add_command(label="Edit piece shapes...", command=self.open_editor)
+        menu.add_cascade(label="Pieces", menu=pm)
+        self.root.config(menu=menu)
+
+        left = ttk.Frame(self.root, padding=8)
+        left.grid(row=0, column=0)
+        right = ttk.Frame(self.root, padding=8)
+        right.grid(row=0, column=1, sticky="n")
+
+        # --- elapsed timer (placed above the board to keep the right panel compact)
+        timer = ttk.LabelFrame(left, text=" Puzzle timer ", padding=6)
+        timer.pack(fill="x", pady=(0, 8))
+        self.timer_label = ttk.Label(
+            timer, text="00:00:00", anchor="center",
+            font=("TkDefaultFont", 20, "bold"))
+        self.timer_label.pack(fill="x", pady=(0, 6))
+        timer_buttons = ttk.Frame(timer)
+        timer_buttons.pack(fill="x")
+        self.btn_timer_start = ttk.Button(
+            timer_buttons, text="Start", command=self.start_timer)
+        self.btn_timer_start.pack(side="left", expand=True, fill="x", padx=(0, 2))
+        self.btn_timer_stop = ttk.Button(
+            timer_buttons, text="Stop", command=self.stop_timer)
+        self.btn_timer_stop.pack(side="left", expand=True, fill="x", padx=2)
+        self.btn_timer_reset = ttk.Button(
+            timer_buttons, text="Reset", command=self.reset_timer)
+        self.btn_timer_reset.pack(side="left", expand=True, fill="x", padx=(2, 0))
+
+        self.cv = tk.Canvas(left, width=BOARD_W, height=BOARD_H, bg="#cfd8dc",
+                            highlightthickness=0)
+        self.cv.pack()
+        self.cv.bind("<Motion>", self.on_motion)
+        self.cv.bind("<Leave>", lambda e: self.set_hover(None))
+        self.cv.bind("<Button-1>", self.on_click)
+        self.cv.bind("<Button-2>", self.on_right)
+        self.cv.bind("<Button-3>", self.on_right)
+        self.cv.bind("<MouseWheel>", lambda e: self.do_rotate())
+        self.cv.bind("<Button-4>", lambda e: self.do_rotate())
+        self.cv.bind("<Button-5>", lambda e: self.do_rotate())
+        self.root.bind("<Key>", self.on_key)
+
+        self.status = ttk.Label(left, text="", wraplength=BOARD_W, font=("TkDefaultFont", 11))
+        self.status.pack(fill="x", pady=(8, 0))
+        self.why = tk.Label(left, text="", wraplength=BOARD_W, justify="left", anchor="nw",
+                            height=3, fg="#1a237e", font=("TkDefaultFont", 10))
+        self.why.pack(fill="x", pady=(4, 0))
+        ttk.Label(left, foreground="#666", wraplength=BOARD_W,
+                  text="Keys: R / mouse wheel = rotate   F = flip   H = hint   "
+                       "Right-click = remove a piece").pack(fill="x")
+
+        # --- board layout
+        lay = ttk.Frame(right)
+        lay.pack(fill="x", pady=(0, 8))
+        ttk.Label(lay, text="Board layout:").pack(side="left")
+        self.layout_var = tk.StringVar(value=STRAIGHT.name)
+        self.layout_box = ttk.Combobox(lay, textvariable=self.layout_var, state="readonly",
+                                       values=[l.name for l in LAYOUTS])
+        self.layout_box.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        self.layout_box.bind("<<ComboboxSelected>>",
+                             lambda e: self.change_layout(self.layout_box.current()))
+
+        # --- setup panel
+        setup = ttk.LabelFrame(right, text=" 1 - Set up the puzzle card ", padding=8)
+        setup.pack(fill="x")
+        self.card_var = tk.StringVar(value="Load a puzzle card...")
+        self.card_box = ttk.Combobox(setup, textvariable=self.card_var, state="readonly",
+                                     values=[c[0] for c in STRAIGHT.cards])
+        self.card_box.pack(fill="x", pady=(0, 6))
+        self.card_box.bind("<<ComboboxSelected>>", lambda e: self.load_card(self.card_box.current()))
+        grid = ttk.Frame(setup)
+        grid.pack()
+        self.pal = []
+        for i in range(len(self.pieces)):
+            cv = tk.Canvas(grid, width=92, height=78, bg="#f5f5f5", cursor="hand2",
+                           highlightthickness=1, highlightbackground="#bbb")
+            cv.grid(row=i // 3, column=i % 3, padx=2, pady=2)
+            cv.bind("<Button-1>", lambda e, i=i: self.on_palette(i))
+            self.pal.append(cv)
+        row = ttk.Frame(setup)
+        row.pack(fill="x", pady=(6, 0))
+        self.btn_rot = ttk.Button(row, text="Rotate (R)", command=self.do_rotate)
+        self.btn_flip = ttk.Button(row, text="Flip (F)", command=self.do_flip)
+        self.btn_clear = ttk.Button(row, text="Clear board", command=self.clear_board)
+        for b in (self.btn_rot, self.btn_flip, self.btn_clear):
+            b.pack(side="left", expand=True, fill="x", padx=1)
+        self.btn_lock = ttk.Button(setup, text="Lock setup & solve", command=self.lock_and_solve)
+        self.btn_lock.pack(fill="x", pady=(6, 0))
+        self.btn_edit = ttk.Button(setup, text="Unlock / edit setup", command=self.unlock)
+        self.btn_edit.pack(fill="x", pady=(6, 0))
+
+        # --- hint panel
+        hp = ttk.LabelFrame(right, text=" 2 - Hints ", padding=8)
+        hp.pack(fill="x", pady=(10, 0))
+        self.btn_hint = ttk.Button(hp, text="Hint (H)", command=self.hint)
+        self.btn_hint.pack(fill="x", ipady=6)
+        r2 = ttk.Frame(hp)
+        r2.pack(fill="x", pady=(6, 0))
+        self.btn_undo = ttk.Button(r2, text="Undo hint", command=self.undo_hint)
+        self.btn_reset = ttk.Button(r2, text="Reset hints", command=self.reset_hints)
+        self.btn_all = ttk.Button(r2, text="Show all", command=self.show_all)
+        for b in (self.btn_undo, self.btn_reset, self.btn_all):
+            b.pack(side="left", expand=True, fill="x", padx=1)
+        ttk.Checkbutton(hp, text="Show reasoning on board", variable=self.show_why,
+                        command=self.redraw).pack(anchor="w", pady=(6, 0))
+        self.btn_other = ttk.Button(hp, text="Try a different solution", command=self.another)
+        self.btn_other.pack(fill="x", pady=(6, 0))
+        
+
+    # ------------------------------------------------------- timer
+    def _timer_seconds(self):
+        elapsed = self.timer_elapsed
+        if self.timer_running and self.timer_started_at is not None:
+            elapsed += time.monotonic() - self.timer_started_at
+        return max(0, int(elapsed))
+
+    def _update_timer_display(self):
+        total = self._timer_seconds()
+        hours, rem = divmod(total, 3600)
+        minutes, seconds = divmod(rem, 60)
+        self.timer_label.config(text=f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+        self.btn_timer_start.config(state="disabled" if self.timer_running else "normal")
+        self.btn_timer_stop.config(state="normal" if self.timer_running else "disabled")
+        if self.timer_running:
+            self.timer_after_id = self.root.after(200, self._update_timer_display)
+        else:
+            self.timer_after_id = None
+
+    def start_timer(self):
+        if self.timer_running:
+            return
+        self.timer_running = True
+        self.timer_started_at = time.monotonic()
+        self._update_timer_display()
+
+    def stop_timer(self):
+        if not self.timer_running:
+            return
+        self.timer_elapsed += time.monotonic() - self.timer_started_at
+        self.timer_started_at = None
+        self.timer_running = False
+        if self.timer_after_id is not None:
+            try:
+                self.root.after_cancel(self.timer_after_id)
+            except tk.TclError:
+                pass
+            self.timer_after_id = None
+        self._update_timer_display()
+
+    def reset_timer(self):
+        self.timer_running = False
+        self.timer_elapsed = 0.0
+        self.timer_started_at = None
+        if self.timer_after_id is not None:
+            try:
+                self.root.after_cancel(self.timer_after_id)
+            except tk.TclError:
+                pass
+            self.timer_after_id = None
+        self._update_timer_display()
+
+    # ------------------------------------------------------- drawing
+    def center(self, r, c):
+        return self.layout.center(r, c)
+
+    def cell_at(self, x, y):
+        return self.layout.cell_at(x, y)
+
+    def draw_piece(self, cells, color, label=None, halo=False, ghost=None):
+        cs = set(cells)
+        R, B = CELL * 0.40, CELL * 0.27
+        passes = ([(GOLD, R + 5, B + 5)] if halo else []) + [(color, R, B)]
+        stip = "gray50" if ghost is not None else ""
+        edge = {None: "", True: "#00e676", False: "#ff1744"}[ghost]
+        for col, rad, th in passes:
+            for r, c in cells:
+                cx, cy = self.center(r, c)
+                for nb in ((r, c + 1), (r + 1, c)):
+                    if nb in cs:
+                        nx, ny = self.center(*nb)
+                        self.cv.create_line(cx, cy, nx, ny, width=2 * th, fill=col,
+                                            stipple=stip)
+            for r, c in cells:
+                cx, cy = self.center(r, c)
+                self.cv.create_oval(cx - rad, cy - rad, cx + rad, cy + rad, fill=col,
+                                    outline=edge, width=3 if edge else 1, stipple=stip)
+        if label:
+            r, c = min(cells)
+            cx, cy = self.center(r, c)
+            self.cv.create_text(cx, cy, text=label, font=("TkDefaultFont", 16, "bold"),
+                                fill="#000" if lum(color) > 150 else "#fff")
+
+    def redraw(self):
+        cv = self.cv
+        cv.delete("all")
+        w, h = self.layout.size()
+        cv.create_rectangle(6, 6, w - 6, h - 6, fill="#37474f", outline="#263238", width=3)
+        for r, c in self.layout.cells:
+            cx, cy = self.center(r, c)
+            cv.create_oval(cx - 12, cy - 12, cx + 12, cy + 12, fill="#263238", outline="")
+        for i, cells in self.placed.items():
+            self.draw_piece(cells, self.pieces[i]["color"])
+        for k in range(self.hints):
+            i, cells = self.solution[k]
+            last = (k == self.hints - 1)
+            why = last and self.show_why.get()
+            if why:
+                for alt in self.steps[k]["alts"]:
+                    self.draw_piece(alt, "#ff8a80", ghost=False)
+            self.draw_piece(cells, self.pieces[i]["color"], label=str(k + 1), halo=last)
+            if why and self.steps[k]["key"]:
+                cx, cy = self.center(*self.steps[k]["key"])
+                self.cv.create_oval(cx - 31, cy - 31, cx + 31, cy + 31,
+                                    outline="#00e5ff", width=4)
+        if not self.locked and not self.solving and self.hover is not None:
+            cells, ok = self.ghost()
+            if cells:
+                inside = [p for p in cells if p in self.layout.cells]
+                self.draw_piece(inside, self.pieces[self.selected]["color"], ghost=ok)
+
+    def draw_palette(self):
+        done = set(self.placed)
+        if self.locked:
+            done |= {self.solution[k][0] for k in range(self.hints)}
+        for i, cv in enumerate(self.pal):
+            p = self.pieces[i]
+            cv.delete("all")
+            col = "#c8c8c8" if i in done else p["color"]
+            cells = p["cells"]
+            h = max(r for r, c in cells) + 1
+            w = max(c for r, c in cells) + 1
+            s = min(12, 80 // max(w, 1), 56 // max(h, 1))
+            ox, oy = (92 - w * s) / 2, 4 + (56 - h * s) / 2
+            for r, c in cells:
+                cv.create_oval(ox + c * s + 1, oy + r * s + 1, ox + (c + 1) * s - 1,
+                               oy + (r + 1) * s - 1, fill=col, outline="#888")
+            cv.create_text(46, 66, text=p["name"] + (" ✓" if i in done else ""),
+                           font=("TkDefaultFont", 8), fill="#444")
+            sel = (i == self.selected and not self.locked)
+            cv.config(highlightbackground="#ffb300" if sel else "#bbb",
+                      highlightthickness=3 if sel else 1)
+
+    def refresh(self):
+        setup = not self.locked and not self.solving
+        for b in (self.btn_rot, self.btn_flip, self.btn_clear, self.btn_lock):
+            b.config(state="normal" if setup else "disabled")
+        self.card_box.config(state="disabled" if self.solving else "readonly")
+        self.layout_box.config(state="disabled" if self.solving else "readonly")
+        locked = self.locked and not self.solving
+        total = len(self.solution)
+        self.btn_hint.config(state="normal" if locked and self.hints < total else "disabled")
+        self.btn_all.config(state="normal" if locked and self.hints < total else "disabled")
+        for b in (self.btn_undo, self.btn_reset):
+            b.config(state="normal" if locked and self.hints > 0 else "disabled")
+        for b in (self.btn_other, self.btn_edit):
+            b.config(state="normal" if locked else "disabled")
+        self.why.config(text=self.steps[self.hints - 1]["text"]
+                        if locked and self.hints else "")
+        self.draw_palette()
+        self.redraw()
+
+    # ---------------------------------------------------- setup input
+    def select(self, i):
+        self.selected = i
+        self.cur = normalize(self.pieces[i]["cells"])
+
+    def select_next(self):
+        n = len(self.pieces)
+        for k in range(1, n + 1):
+            j = (self.selected + k) % n
+            if j not in self.placed:
+                self.select(j)
+                return
+
+    def change_layout(self, idx):
+        layout = LAYOUTS[idx]
+        if self.solving or layout is self.layout:
+            self.layout_var.set(self.layout.name)
+            return
+        self.set_layout(layout)
+
+    def set_layout(self, layout):
+        use_layout(layout)
+        self.layout = layout
+        self.layout_var.set(layout.name)
+        self.table = build_placements(self.pieces)
+        self.placed = {}
+        self.locked = False
+        self.solution, self.steps, self.hints = [], [], 0
+        self.hover = None
+        w, h = layout.size()
+        self.cv.config(width=w, height=h)
+        self.card_box.config(values=[c[0] for c in layout.cards])
+        self.card_var.set("Load a puzzle card...")
+        self.select(0)
+        self.set_status(f"{layout.name} board - load a card from the dropdown or place pieces.")
+        self.refresh()
+
+    def load_card(self, idx):
+        if self.solving or idx < 0:
+            return
+        label, rows = self.layout.cards[idx]
+        if self.locked:
+            self.unlock()
+        found, bad = card_pieces(rows, self.pieces)
+        self.placed = found
+        self.hover = None
+        free = [i for i in range(len(self.pieces)) if i not in found]
+        if free:
+            self.select(free[0])
+        self.set_status(f"Card {label} loaded: {len(found)} pieces placed, {len(free)} to go. "
+                        "Press 'Lock setup & solve'.")
+        self.refresh()
+        if bad:
+            messagebox.showwarning(
+                "Shape mismatch",
+                "These pieces on the card don't match your current piece shapes: "
+                + ", ".join(bad) + ".\nCheck Pieces > Edit piece shapes...")
+
+    def on_palette(self, i):
+        if self.locked or self.solving:
+            return
+        self.placed.pop(i, None)
+        self.select(i)
+        self.refresh()
+
+    def ghost(self):
+        if self.hover is None:
+            return None, False
+        hr, hc = self.hover
+        ar, ac = anchor_of(self.cur)
+        cells = [(hr + r - ar, hc + c - ac) for r, c in self.cur]
+        taken = {p for cs in self.placed.values() for p in cs}
+        ok = all((r, c) in self.layout.cells and (r, c) not in taken for r, c in cells)
+        return cells, ok
+
+    def set_hover(self, cell):
+        if cell != self.hover:
+            self.hover = cell
+            if not self.locked and not self.solving:
+                self.redraw()
+
+    def on_motion(self, e):
+        self.set_hover(self.cell_at(e.x, e.y))
+
+    def on_click(self, e):
+        if self.locked or self.solving:
+            return
+        self.hover = self.cell_at(e.x, e.y)
+        cells, ok = self.ghost()
+        if cells and ok:
+            self.placed[self.selected] = cells
+            self.select_next()
+            self.set_status(f"Placed. {len(self.placed)} piece(s) on the board.")
+            self.refresh()
+
+    def on_right(self, e):
+        if self.locked or self.solving:
+            return
+        cell = self.cell_at(e.x, e.y)
+        for i, cells in list(self.placed.items()):
+            if cell in cells:
+                del self.placed[i]
+                self.select(i)
+                self.refresh()
+                return
+
+    def do_rotate(self):
+        if not self.locked and not self.solving:
+            self.cur = rotate(self.cur)
+            self.redraw()
+
+    def do_flip(self):
+        if not self.locked and not self.solving:
+            self.cur = flip(self.cur)
+            self.redraw()
+
+    def clear_board(self):
+        self.placed.clear()
+        self.select(0)
+        self.set_status("Board cleared.")
+        self.refresh()
+
+    def on_key(self, e):
+        k = e.keysym.lower()
+        if k == "r":
+            self.do_rotate()
+        elif k == "f":
+            self.do_flip()
+        elif k == "h":
+            self.hint()
+
+    def set_status(self, text):
+        self.status.config(text=text)
+
+    # ------------------------------------------------- lock & solve
+    def lock_and_solve(self, randomize=False):
+        if self.solving:
+            return
+        filled = 0
+        for cells in self.placed.values():
+            for r, c in cells:
+                filled |= bit(r, c)
+        rem = sum(1 << i for i in range(len(self.pieces)) if i not in self.placed)
+        sizes = [len(p["cells"]) for p in self.pieces]
+        table = self.table
+        rng = random.Random() if randomize else None
+        deadline = time.time() + 90
+        self.cancel.clear()
+        self.solving = True
+        self.set_status("Solving... (this normally takes well under a second)")
+        self.refresh()
+
+        names = [p["name"] for p in self.pieces]
+
+        def work():
+            res, steps, err = None, [], None
+            try:
+                res = solve(table, sizes, filled, rem, rng, deadline, self.cancel)
+                if res:
+                    steps = plan_hints(table, sizes, filled, rem, res, names, self.cancel)
+            except Cancelled:
+                err, res = "cancel", None
+            except TimeoutError:
+                err, res = "timeout", None
+            self.root.after(0, lambda: self.solve_done(res, steps, err))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def solve_done(self, res, steps, err):
+        self.solving = False
+        if err == "timeout":
+            messagebox.showwarning("Solver", "The solver gave up after 90 s.")
+        elif res is None and err is None:
+            messagebox.showwarning(
+                "No solution",
+                "This setup cannot be completed.\n\nCheck that the pieces on the board "
+                "match your puzzle card. If the card is right, one of the piece shapes "
+                "may differ from your physical set (Pieces > Edit piece shapes...).")
+        if res is None:
+            if self.locked:      # "another solution" failed, keep the old one
+                self.set_status("Kept the previous solution.")
+            else:
+                self.set_status("No solution found - fix the setup and try again.")
+            self.refresh()
+            return
+        self.locked = True
+        self.steps = steps
+        self.solution = [(st["piece"], st["cells"]) for st in steps]
+        self.hints = 0
+        self.hover = None
+        self.set_status(f"Setup locked. {len(self.solution)} piece(s) left to place - press Hint.")
+        self.refresh()
+
+    def unlock(self):
+        self.locked = False
+        self.solution = []
+        self.steps = []
+        self.hints = 0
+        self.set_status("Setup unlocked - edit the board, then lock again.")
+        self.refresh()
+
+    def another(self):
+        self.lock_and_solve(randomize=True)
+
+    # ------------------------------------------------------- hints
+    def hint(self):
+        if not self.locked or self.solving or self.hints >= len(self.solution):
+            return
+        self.hints += 1
+        self.hint_status()
+        self.refresh()
+
+    def hint_status(self):
+        total = len(self.solution)
+        if self.hints == 0:
+            self.set_status(f"Setup locked. {total} piece(s) left to place - press Hint.")
+        elif self.hints >= total:
+            self.set_status(f"Hint {total}/{total}: the {self.pieces[self.solution[-1][0]]['name']} "
+                            "piece completes the puzzle!")
+        else:
+            name = self.pieces[self.solution[self.hints - 1][0]]["name"]
+            self.set_status(f"Hint {self.hints}/{total}: place the {name} piece "
+                            "(gold outline).")
+
+    def undo_hint(self):
+        if self.hints:
+            self.hints -= 1
+            self.hint_status()
+            self.refresh()
+
+    def reset_hints(self):
+        self.hints = 0
+        self.hint_status()
+        self.refresh()
+
+    def show_all(self):
+        self.hints = len(self.solution)
+        self.hint_status()
+        self.refresh()
+
+    # ---------------------------------------------------- piece editor
+    def open_editor(self):
+        if self.solving:
+            return
+        PieceEditor(self)
+
+    def set_pieces(self, shapes):
+        for p, cells in zip(self.pieces, shapes):
+            p["cells"] = normalize(cells)
+        save_pieces(self.pieces)
+        self.table = build_placements(self.pieces)
+        self.placed.clear()
+        self.locked = False
+        self.solution = []
+        self.steps = []
+        self.hints = 0
+        self.select(0)
+        total = sum(len(p["cells"]) for p in self.pieces)
+        if total != len(LAYOUT.cells):
+            messagebox.showwarning(
+                "Piece total", f"The pieces cover {total} cells, but the board has "
+                               f"{len(LAYOUT.cells)}. A complete solution is impossible until "
+                               "the totals match.")
+        self.set_status("Piece shapes updated - board cleared.")
+        self.refresh()
+
+
+class PieceEditor(tk.Toplevel):
+    G, S = 6, 38
+
+    def __init__(self, app):
+        super().__init__(app.root)
+        self.app = app
+        self.title("Edit piece shapes")
+        self.transient(app.root)
+        self.resizable(False, False)
+        self.work = [set(p["cells"]) for p in app.pieces]
+        self.sel = 0
+
+        left = ttk.Frame(self, padding=8)
+        left.grid(row=0, column=0, sticky="n")
+        self.lb = tk.Listbox(left, exportselection=False, height=12, width=14)
+        for p in app.pieces:
+            self.lb.insert("end", p["name"])
+        self.lb.selection_set(0)
+        self.lb.bind("<<ListboxSelect>>", self.on_pick)
+        self.lb.pack()
+
+        right = ttk.Frame(self, padding=8)
+        right.grid(row=0, column=1)
+        ttk.Label(right, text="Click squares to toggle them.").pack(anchor="w")
+        self.cv = tk.Canvas(right, width=self.G * self.S, height=self.G * self.S,
+                            bg="#eceff1", highlightthickness=0)
+        self.cv.pack(pady=4)
+        self.cv.bind("<Button-1>", self.toggle)
+        self.info = ttk.Label(right, text="")
+        self.info.pack(anchor="w")
+        row = ttk.Frame(right)
+        row.pack(fill="x", pady=(8, 0))
+        ttk.Button(row, text="Restore defaults", command=self.defaults).pack(side="left")
+        ttk.Button(row, text="Cancel", command=self.destroy).pack(side="right")
+        ttk.Button(row, text="Apply", command=self.apply).pack(side="right", padx=4)
+        self.draw()
+
+    def on_pick(self, _):
+        sel = self.lb.curselection()
+        if sel:
+            self.sel = sel[0]
+            self.draw()
+
+    def toggle(self, e):
+        c, r = e.x // self.S, e.y // self.S
+        if 0 <= r < self.G and 0 <= c < self.G:
+            self.work[self.sel] ^= {(r, c)}
+            self.draw()
+
+    def draw(self):
+        self.cv.delete("all")
+        S = self.S
+        for i in range(self.G + 1):
+            self.cv.create_line(i * S, 0, i * S, self.G * S, fill="#b0bec5")
+            self.cv.create_line(0, i * S, self.G * S, i * S, fill="#b0bec5")
+        col = self.app.pieces[self.sel]["color"]
+        for r, c in self.work[self.sel]:
+            self.cv.create_oval(c * S + 3, r * S + 3, (c + 1) * S - 3, (r + 1) * S - 3,
+                                fill=col, outline="#555")
+        total = sum(len(w) for w in self.work)
+        self.info.config(
+            text=f"{self.app.pieces[self.sel]['name']}: {len(self.work[self.sel])} squares   |   "
+                 f"all pieces: {total} (board needs {len(LAYOUT.cells)})",
+            foreground="#000" if total == len(LAYOUT.cells) else "#c62828")
+
+    def defaults(self):
+        self.work = [set(normalize(parse(a))) for _, _, a in DEFAULT_PIECES]
+        self.draw()
+
+    def apply(self):
+        for p, w in zip(self.app.pieces, self.work):
+            if not w or not is_connected(w):
+                messagebox.showerror("Invalid shape",
+                                     f"'{p['name']}' must be one connected group of squares.",
+                                     parent=self)
+                return
+        self.app.set_pieces([sorted(w) for w in self.work])
+        self.destroy()
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    App(root)
+    root.mainloop()
