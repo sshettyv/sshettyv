@@ -1,0 +1,583 @@
+#!/usr/bin/env python3
+"""
+Pop-Piece Puzzle
+A small Tkinter GUI with the 60 preset challenges from the booklet.
+
+Run with:
+    python pop_piece_puzzle.py
+
+Goal: slide the RED piece onto the EXIT square at the upper-right.
+
+Controls:
+- Pick a challenge from the drop-down at the top. "Reset Board" puts the
+  current challenge back to its starting layout (and clears the timer).
+- The timer starts automatically when you move the first piece and stops
+  when the red piece reaches the exit.
+- Pieces SLIDE on the board, like the real game: drag a piece and it follows
+  the pointer one square at a time, stopping when it hits a wall or another
+  piece. You can't lift a piece and drop it somewhere else, and a piece can't
+  squeeze diagonally between two pieces. The upper-right EXIT square can only
+  be entered straight from the left.
+- The white pieces are locked, as in the real game: they cannot be moved
+  or rotated.
+- Rotation is switched off because pieces only slide in the real game.
+  (Set ALLOW_ROTATION = True below to bring back right-click / R rotation.)
+"""
+import time
+import tkinter as tk
+from tkinter import ttk
+
+CELL = 76
+BOARD_SIZE = 5
+BOARD_X = 32
+BOARD_Y = 32
+BOARD_END_X = BOARD_X + BOARD_SIZE * CELL
+BOARD_END_Y = BOARD_Y + BOARD_SIZE * CELL
+
+# One extra square just outside the upper-right corner of the board.
+EXIT_CELL = (BOARD_SIZE, 0)
+
+# The real game only lets pieces slide, never rotate.
+ALLOW_ROTATION = False
+
+PIECE_R = CELL * 0.39
+
+CANVAS_W = BOARD_END_X + CELL + 32
+CANVAS_H = BOARD_END_Y + 32
+
+COLORS = {
+    "white": "#f5fbfc",
+    "red": "#e51d2a",
+    "yellow": "#ffd900",
+    "purple": "#a82aa8",
+    "blue": "#079bd3",
+    "green": "#63bd23",
+    "orange": "#ff7908",
+}
+OUTLINE = {
+    "white": "#b7c6c9", "red": "#a90e19", "yellow": "#c5a900",
+    "purple": "#7c197e", "blue": "#0879a6", "green": "#438b16",
+    "orange": "#c65a00",
+}
+
+# ----------------------------------------------------------------------
+# Preset challenges (from the booklet)
+# ----------------------------------------------------------------------
+# Each challenge lists the squares (column, row) every piece covers, with
+# (0, 0) at the top-left of the 5x5 board.  (5, 0) is the EXIT square.
+# "white" holds one square per single white piece.
+LEVELS = [
+    ("Starter", 1, 12),
+    ("Junior", 13, 24),
+    ("Expert", 25, 36),
+    ("Master", 37, 48),
+    ("Wizard", 49, 60),
+]
+
+CHALLENGES = {
+    1: dict(red=[(2, 3), (3, 3)], green=[(0, 1), (1, 2), (2, 2)], blue=[(3, 0), (2, 1), (3, 1)], white=[(4, 3)]),
+    2: dict(orange=[(0, 1), (1, 2), (0, 3)], white=[(1, 1), (0, 2), (4, 4)], blue=[(2, 1), (3, 1), (2, 2)], red=[(3, 2), (4, 2)], yellow=[(1, 3), (2, 4)], purple=[(2, 3), (3, 4), (4, 3)]),
+    3: dict(purple=[(0, 0), (1, 1), (0, 2)], white=[(0, 1), (0, 4), (4, 4)], green=[(2, 1), (3, 2), (4, 2)], red=[(2, 3), (3, 3)]),
+    4: dict(blue=[(0, 0), (1, 0), (0, 1)], white=[(1, 1)], red=[(0, 2), (1, 2)], purple=[(3, 0), (4, 1), (3, 2)]),
+    5: dict(green=[(1, 0), (0, 1), (0, 2)], white=[(1, 1), (4, 1)], purple=[(3, 2), (4, 3), (3, 4)], red=[(2, 3), (3, 3)]),
+    6: dict(red=[(0, 1), (1, 1)], purple=[(1, 0), (2, 1), (3, 0)], white=[(3, 1)], blue=[(3, 2), (3, 3), (4, 3)]),
+    7: dict(white=[(2, 0), (0, 3)], green=[(3, 0), (2, 1), (2, 2)], blue=[(4, 0), (5, 0), (4, 1)], red=[(3, 2), (4, 2)]),
+    8: dict(purple=[(0, 0), (1, 1), (0, 2)], white=[(0, 1), (1, 4)], red=[(1, 2), (2, 2)], blue=[(3, 2), (4, 2), (3, 3)], orange=[(2, 3), (3, 4), (4, 3)]),
+    9: dict(green=[(2, 0), (3, 0), (4, 1)], blue=[(2, 1), (3, 1), (2, 2)], purple=[(3, 2), (4, 3), (3, 4)], red=[(2, 3), (3, 3)], white=[(1, 3), (2, 4)]),
+    10: dict(white=[(2, 0), (2, 2)], yellow=[(3, 0), (4, 1)], red=[(3, 2), (4, 2)], green=[(2, 3), (3, 3), (4, 4)]),
+    11: dict(green=[(0, 0), (1, 0), (2, 1)], white=[(3, 1), (4, 2)], red=[(2, 2), (3, 2)], purple=[(3, 3), (2, 4), (4, 4)]),
+    12: dict(blue=[(2, 0), (1, 1), (2, 1)], purple=[(3, 0), (4, 1), (3, 2)], orange=[(2, 2), (1, 3), (3, 3)], red=[(0, 4), (1, 4)]),
+    13: dict(white=[(0, 0), (3, 4)], green=[(2, 1), (3, 1), (4, 2)], orange=[(3, 2), (2, 3), (4, 3)], purple=[(3, 3), (2, 4), (4, 4)], red=[(0, 4), (1, 4)]),
+    14: dict(yellow=[(3, 1), (4, 2)], blue=[(1, 2), (2, 2), (1, 3)], white=[(3, 2), (4, 4)], red=[(3, 3), (4, 3)], green=[(0, 3), (1, 4), (2, 4)]),
+    15: dict(green=[(0, 1), (1, 1), (2, 2)], purple=[(2, 1), (3, 2), (2, 3)], orange=[(4, 0), (3, 1), (4, 2)], red=[(3, 3), (4, 3)]),
+    16: dict(green=[(0, 1), (1, 1), (2, 2)], blue=[(3, 0), (2, 1), (3, 1)], white=[(4, 2), (4, 4)], purple=[(2, 3), (1, 4), (3, 4)], red=[(3, 3), (4, 3)]),
+    17: dict(green=[(1, 0), (2, 0), (3, 1)], white=[(0, 1), (1, 1)], purple=[(2, 1), (1, 2), (3, 2)], blue=[(1, 3), (2, 3), (1, 4)], red=[(3, 3), (4, 3)]),
+    18: dict(green=[(3, 0), (3, 1), (2, 2)], red=[(3, 2), (4, 2)], yellow=[(1, 2), (2, 3)], white=[(1, 1), (0, 4)], blue=[(0, 3), (1, 3), (1, 4)]),
+    19: dict(purple=[(2, 1), (3, 2), (4, 1)], green=[(1, 2), (2, 2), (3, 3)], orange=[(0, 3), (1, 4), (2, 3)], white=[(4, 3)], red=[(3, 4), (4, 4)]),
+    20: dict(white=[(0, 0), (0, 1), (3, 4)], yellow=[(2, 0), (1, 1)], blue=[(2, 1), (3, 1), (2, 2)], red=[(3, 2), (4, 2)], green=[(0, 2), (1, 2), (2, 3)], purple=[(1, 3), (0, 4), (2, 4)]),
+    21: dict(white=[(0, 0), (2, 0), (0, 2)], purple=[(1, 0), (0, 1), (1, 2)], blue=[(3, 1), (4, 1), (3, 2)], yellow=[(2, 2), (1, 3)], red=[(2, 3), (3, 3)], green=[(0, 3), (1, 4), (2, 4)]),
+    22: dict(white=[(2, 0), (0, 4), (3, 4)], purple=[(0, 1), (1, 2), (2, 1)], orange=[(3, 1), (2, 2), (3, 3)], green=[(0, 2), (1, 3), (2, 3)], red=[(1, 4), (2, 4)]),
+    23: dict(white=[(2, 1)], blue=[(4, 0), (3, 1), (4, 1)], yellow=[(3, 2), (2, 3)], red=[(3, 3), (4, 3)], purple=[(1, 3), (0, 4), (2, 4)]),
+    24: dict(orange=[(1, 0), (3, 0), (2, 1)], yellow=[(4, 0), (3, 1)], red=[(2, 2), (3, 2)], white=[(4, 2), (2, 4)], purple=[(2, 3), (3, 4), (4, 3)]),
+    25: dict(orange=[(1, 0), (3, 0), (2, 1)], white=[(2, 0), (0, 4), (4, 4)], red=[(0, 1), (1, 1)], purple=[(1, 2), (3, 2), (2, 3)], yellow=[(4, 2), (3, 3)], green=[(1, 3), (2, 4), (3, 4)]),
+    26: dict(white=[(0, 0), (0, 2)], orange=[(1, 0), (0, 1), (1, 2)], purple=[(2, 0), (1, 1), (2, 2)], blue=[(2, 1), (3, 1), (3, 2)], red=[(3, 3), (4, 3)]),
+    27: dict(purple=[(2, 0), (4, 0), (3, 1)], red=[(1, 1), (2, 1)], blue=[(2, 2), (3, 2), (2, 3)], orange=[(4, 2), (3, 3), (4, 4)], white=[(4, 3), (1, 4), (3, 4)], yellow=[(1, 3), (2, 4)]),
+    28: dict(white=[(0, 0), (0, 3)], green=[(1, 0), (2, 1), (3, 1)], red=[(0, 1), (1, 1)], purple=[(0, 2), (1, 3), (0, 4)], blue=[(2, 2), (3, 2), (2, 3)]),
+    29: dict(orange=[(0, 0), (1, 1), (0, 2)], yellow=[(1, 2), (0, 3)], purple=[(2, 1), (4, 1), (3, 2)], green=[(4, 2), (3, 3), (3, 4)], white=[(4, 3), (4, 4), (2, 4)], red=[(0, 4), (1, 4)]),
+    30: dict(white=[(2, 0), (1, 3), (0, 4)], red=[(2, 1), (3, 1)], blue=[(4, 0), (5, 0), (4, 1)], purple=[(2, 2), (4, 2), (3, 3)], yellow=[(1, 2), (2, 3)], green=[(0, 3), (1, 4), (2, 4)]),
+    31: dict(white=[(0, 0), (0, 4), (3, 4)], orange=[(1, 0), (0, 1), (2, 1)], green=[(2, 0), (3, 0), (4, 1)], purple=[(1, 2), (0, 3), (2, 3)], red=[(2, 2), (3, 2)]),
+    32: dict(white=[(1, 0), (4, 1), (1, 4)], yellow=[(2, 1), (1, 2)], orange=[(0, 2), (1, 3), (0, 4)], purple=[(3, 2), (2, 3), (4, 3)], red=[(3, 4), (4, 4)]),
+    33: dict(blue=[(0, 0), (1, 0), (1, 1)], purple=[(2, 0), (4, 0), (3, 1)], yellow=[(2, 1), (3, 2)], orange=[(2, 2), (4, 2), (3, 3)], white=[(4, 3), (0, 4)], red=[(3, 4), (4, 4)]),
+    34: dict(red=[(0, 0), (1, 0)], purple=[(2, 0), (1, 1), (2, 2)], yellow=[(1, 2), (0, 3)], white=[(3, 3), (4, 3), (0, 4)]),
+    35: dict(white=[(0, 0), (1, 1)], purple=[(1, 0), (3, 0), (2, 1)], red=[(0, 2), (1, 2)], yellow=[(3, 2), (2, 3)], blue=[(1, 3), (1, 4), (2, 4)]),
+    36: dict(purple=[(0, 0), (1, 1), (0, 2)], white=[(2, 0), (4, 3)], green=[(4, 1), (4, 2), (3, 3)], orange=[(1, 2), (0, 3), (2, 3)], red=[(2, 2), (3, 2)]),
+    37: dict(green=[(1, 0), (0, 1), (0, 2)], red=[(2, 0), (3, 0)], purple=[(4, 0), (3, 1), (4, 2)], orange=[(2, 1), (1, 2), (2, 3)], white=[(4, 3)]),
+    38: dict(blue=[(0, 0), (0, 1), (1, 1)], green=[(2, 0), (3, 0), (4, 1)], orange=[(2, 1), (3, 2), (2, 3)], purple=[(3, 1), (4, 2), (3, 3)], red=[(1, 2), (2, 2)]),
+    39: dict(blue=[(0, 1), (1, 1), (1, 2)], orange=[(3, 0), (2, 1), (4, 1)], purple=[(2, 2), (1, 3), (2, 4)], red=[(3, 2), (4, 2)], yellow=[(3, 3), (4, 4)]),
+    40: dict(white=[(2, 0)], red=[(0, 2), (1, 2)], orange=[(3, 1), (2, 2), (4, 2)], blue=[(0, 3), (1, 3), (1, 4)], purple=[(2, 3), (4, 3), (3, 4)]),
+    41: dict(blue=[(2, 0), (3, 0), (2, 1)], purple=[(1, 1), (2, 2), (1, 3)], green=[(1, 2), (0, 3), (0, 4)], white=[(1, 4), (4, 3)], red=[(3, 4), (4, 4)]),
+    42: dict(yellow=[(1, 0), (0, 1)], blue=[(1, 1), (0, 2), (1, 2)], red=[(0, 3), (1, 3)], purple=[(2, 1), (4, 1), (3, 2)], white=[(4, 2), (3, 3)]),
+    43: dict(white=[(0, 1)], purple=[(2, 0), (1, 1), (3, 1)], blue=[(1, 2), (1, 3), (2, 3)], green=[(3, 2), (3, 3), (2, 4)], red=[(3, 4), (4, 4)]),
+    44: dict(white=[(0, 0), (0, 1)], green=[(3, 0), (3, 1), (2, 2)], red=[(3, 2), (4, 2)], purple=[(1, 2), (0, 3), (2, 3)], blue=[(1, 3), (0, 4), (1, 4)]),
+    45: dict(white=[(0, 0), (1, 0), (4, 4)], red=[(2, 0), (3, 0)], blue=[(4, 0), (5, 0), (4, 1)], yellow=[(2, 1), (1, 2)], purple=[(2, 2), (3, 3), (2, 4)], green=[(4, 2), (4, 3), (3, 4)]),
+    46: dict(blue=[(1, 0), (1, 1), (2, 1)], purple=[(0, 1), (1, 2), (0, 3)], white=[(4, 1)], orange=[(2, 2), (1, 3), (3, 3)], yellow=[(4, 3), (3, 4)], red=[(0, 4), (1, 4)]),
+    47: dict(purple=[(0, 0), (2, 0), (1, 1)], yellow=[(3, 0), (2, 1)], orange=[(0, 1), (1, 2), (0, 3)], blue=[(3, 1), (2, 2), (3, 2)], green=[(1, 3), (2, 4), (3, 4)], red=[(2, 3), (3, 3)], white=[(0, 4)]),
+    48: dict(white=[(0, 0), (0, 4), (4, 4)], orange=[(2, 0), (4, 0), (3, 1)], yellow=[(1, 1), (2, 2)], purple=[(2, 1), (4, 1), (3, 2)], red=[(0, 2), (1, 2)], blue=[(2, 3), (1, 4), (2, 4)]),
+    49: dict(white=[(0, 0), (4, 2)], blue=[(3, 0), (3, 1), (4, 1)], purple=[(2, 1), (3, 2), (2, 3)], red=[(3, 3), (4, 3)], yellow=[(1, 3), (2, 4)]),
+    50: dict(blue=[(3, 0), (4, 0), (3, 1)], purple=[(4, 1), (3, 2), (4, 3)], orange=[(1, 1), (2, 2), (1, 3)], white=[(0, 4), (1, 4), (4, 4)], red=[(2, 4), (3, 4)]),
+    51: dict(purple=[(0, 0), (1, 1), (0, 2)], white=[(1, 0), (2, 0), (0, 1)], yellow=[(2, 1), (3, 2)], orange=[(1, 2), (0, 3), (2, 3)], blue=[(3, 3), (2, 4), (3, 4)], red=[(0, 4), (1, 4)]),
+    52: dict(white=[(1, 0), (4, 3)], yellow=[(2, 0), (3, 1)], red=[(1, 1), (2, 1)], orange=[(0, 1), (1, 2), (0, 3)], purple=[(2, 2), (1, 3), (2, 4)]),
+    53: dict(purple=[(0, 0), (2, 0), (1, 1)], yellow=[(3, 0), (2, 1)], blue=[(0, 2), (1, 2), (0, 3)], red=[(2, 2), (3, 2)], orange=[(4, 2), (3, 3), (4, 4)], green=[(1, 3), (2, 4), (3, 4)]),
+    54: dict(orange=[(0, 0), (2, 0), (1, 1)], purple=[(3, 0), (2, 1), (3, 2)], blue=[(3, 1), (4, 1), (4, 2)], green=[(2, 2), (1, 3), (1, 4)], red=[(3, 3), (4, 3)]),
+    55: dict(green=[(0, 0), (1, 0), (2, 1)], blue=[(1, 1), (1, 2), (2, 2)], purple=[(0, 2), (1, 3), (0, 4)], orange=[(4, 0), (3, 1), (4, 2)], red=[(3, 3), (4, 3)]),
+    56: dict(white=[(1, 0)], red=[(1, 1), (2, 1)], blue=[(3, 0), (4, 0), (4, 1)], green=[(3, 1), (3, 2), (2, 3)], purple=[(4, 2), (3, 3), (4, 4)]),
+    57: dict(purple=[(1, 0), (3, 0), (2, 1)], red=[(0, 1), (1, 1)], white=[(4, 1)], orange=[(1, 2), (0, 3), (1, 4)], yellow=[(2, 2), (3, 3)]),
+    58: dict(green=[(0, 1), (1, 2), (2, 2)], purple=[(2, 0), (1, 1), (3, 1)], white=[(4, 1)], blue=[(1, 3), (0, 4), (1, 4)], red=[(2, 4), (3, 4)]),
+    59: dict(orange=[(0, 0), (2, 0), (1, 1)], white=[(0, 1), (3, 4)], blue=[(4, 0), (3, 1), (4, 1)], yellow=[(2, 1), (1, 2)], red=[(1, 3), (2, 3)], purple=[(4, 2), (3, 3), (4, 4)]),
+    60: dict(orange=[(0, 0), (1, 1), (0, 2)], purple=[(2, 0), (4, 0), (3, 1)], green=[(4, 1), (4, 2), (3, 3)], yellow=[(1, 2), (0, 3)], red=[(0, 4), (1, 4)], blue=[(4, 3), (3, 4), (4, 4)]),
+}
+
+
+def level_name(n):
+    for name, lo, hi in LEVELS:
+        if lo <= n <= hi:
+            return name
+    return ""
+
+
+def challenge_label(n):
+    return f"Challenge {n}  ({level_name(n)})"
+
+
+def build_pieces(number):
+    """Turn a challenge's absolute squares into piece dicts."""
+    pieces = []
+    spec = CHALLENGES[number]
+    for color, cells in spec.items():
+        if color == "white":
+            for i, (col, row) in enumerate(cells, 1):
+                pieces.append({
+                    "name": f"White {i}", "color": "white", "cells": [(0, 0)],
+                    "pos": (col, row), "items": [],
+                })
+        else:
+            min_c = min(c for c, _ in cells)
+            min_r = min(r for _, r in cells)
+            pieces.append({
+                "name": color.capitalize(), "color": color,
+                "cells": [(c - min_c, r - min_r) for c, r in cells],
+                "pos": (min_c, min_r), "items": [],
+            })
+    return pieces
+
+
+class PuzzleApp:
+    def __init__(self, root):
+        self.root = root
+        root.title("Pop-Piece Puzzle")
+        root.resizable(False, False)
+        root.configure(bg="#edf1ec")
+
+        top = tk.Frame(root, bg="#edf1ec")
+        top.pack(fill="x", padx=14, pady=(10, 4))
+        tk.Label(top, text="POP-PIECE PUZZLE", font=("Arial", 16, "bold"),
+                 bg="#edf1ec", fg="#25352f").pack(side="left")
+        controls = tk.Frame(top, bg="#edf1ec")
+        controls.pack(side="right")
+        self.timer_var = tk.StringVar(value="00:00")
+        tk.Label(controls, textvariable=self.timer_var, font=("Consolas", 13, "bold"),
+                 bg="#edf1ec", fg="#25352f", width=6).pack(side="left", padx=(0, 8))
+        tk.Button(controls, text="Reset Board", command=self.reset, padx=8).pack(side="left", padx=2)
+
+        # Challenge selector
+        picker = tk.Frame(root, bg="#edf1ec")
+        picker.pack(fill="x", padx=14, pady=(0, 4))
+        tk.Label(picker, text="Challenge:", font=("Arial", 11, "bold"),
+                 bg="#edf1ec", fg="#25352f").pack(side="left")
+        self.current = 1
+        self.challenge_var = tk.StringVar(value=challenge_label(self.current))
+        self.challenge_box = ttk.Combobox(
+            picker, textvariable=self.challenge_var, state="readonly", width=26,
+            values=[challenge_label(n) for n in sorted(CHALLENGES)], height=15)
+        self.challenge_box.pack(side="left", padx=8)
+        self.challenge_box.bind("<<ComboboxSelected>>", self.on_challenge_selected)
+
+        self.status = tk.StringVar(value="")
+        tk.Label(root, textvariable=self.status, bg="#edf1ec", fg="#3f5149",
+                 font=("Arial", 10)).pack(anchor="w", padx=16, pady=(0, 5))
+
+        self.canvas = tk.Canvas(root, width=CANVAS_W, height=CANVAS_H,
+                                bg="#f8f8f1", highlightthickness=0)
+        self.canvas.pack(padx=10, pady=(0, 10))
+
+        self.pieces = []
+        self.drag = None
+        self.mouse = (0, 0)
+        self.solved = False
+        self.timer_running = False
+        self.timer_start = None
+        self.timer_job = None
+        self.reset()
+
+        self.canvas.bind("<ButtonPress-1>", self.on_press)
+        self.canvas.bind("<B1-Motion>", self.on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_release)
+        self.canvas.bind("<Motion>", self.on_motion)
+        # Right-click (Button-2 on macOS) rotates; Shift reverses direction.
+        for btn in ("<Button-3>", "<Button-2>"):
+            self.canvas.bind(btn, lambda e: self.rotate_at(e.x, e.y, True))
+            self.canvas.bind("<Shift-" + btn[1:], lambda e: self.rotate_at(e.x, e.y, False))
+        root.bind("<KeyPress-r>", lambda e: self.rotate_at(*self.mouse, True))
+        root.bind("<KeyPress-R>", lambda e: self.rotate_at(*self.mouse, False))
+
+    # ------------------------------------------------------------------
+    # Challenge selection / setup / drawing
+    # ------------------------------------------------------------------
+    def on_challenge_selected(self, _event=None):
+        self.current = int(self.challenge_var.get().split()[1])
+        self.reset()
+        self.challenge_box.selection_clear()
+        self.canvas.focus_set()
+
+    def reset(self):
+        """Put the current challenge back to its starting layout."""
+        self.reset_timer()
+        self.solved = False
+        self.canvas.delete("all")
+        self.drag = None
+        self.draw_board()
+        self.pieces = build_pieces(self.current)
+        for p in self.pieces:
+            self.draw_piece(p)
+        self.status.set(f"{challenge_label(self.current)}: get the red piece to the EXIT. "
+                        "The timer starts when you move a piece.")
+
+    def draw_board(self):
+        x0, y0 = BOARD_X, BOARD_Y
+        x1, y1 = BOARD_END_X, BOARD_END_Y
+        self.canvas.create_rectangle(x0 - 12, y0 - 12, x1 + 12, y1 + 12,
+                                     fill="#e7eee9", outline="#b8c4bd", width=3,
+                                     tags="board")
+        self.canvas.create_rectangle(x0, y0, x1, y1, fill="#fbfcf8",
+                                     outline="#aebbb4", width=2, tags="board")
+        for i in range(1, BOARD_SIZE):
+            x = x0 + i * CELL
+            y = y0 + i * CELL
+            self.canvas.create_line(x, y0, x, y1, fill="#d6dfd9", width=2, tags="board")
+            self.canvas.create_line(x0, y, x1, y, fill="#d6dfd9", width=2, tags="board")
+
+        # EXIT square: an opening in the right wall at the top row.
+        ex0 = x1 - 2
+        self.canvas.create_rectangle(ex0, y0 - 12, x1 + CELL, y0 + CELL + 2,
+                                     fill="#f8f8f1", outline="", tags="board")
+        self.canvas.create_rectangle(x1, y0, x1 + CELL, y0 + CELL,
+                                     fill="#fde8e8", outline="#e51d2a", width=2,
+                                     dash=(4, 3), tags="board")
+        self.canvas.create_line(x1, y0 + 3, x1, y0 + CELL - 3,
+                                fill="#fde8e8", width=4, tags="board")
+        self.canvas.create_text(x1 + CELL / 2, y0 + CELL / 2, text="EXIT",
+                                fill="#a90e19", font=("Arial", 9, "bold"), tags="board")
+
+    @staticmethod
+    def cell_center(col, row):
+        return BOARD_X + (col + 0.5) * CELL, BOARD_Y + (row + 0.5) * CELL
+
+    def piece_anchor(self, p):
+        """Pixel centre of the piece's (0, 0) cell."""
+        return self.cell_center(*p["pos"])
+
+    def draw_piece(self, p, anchor=None):
+        for item in p["items"]:
+            self.canvas.delete(item)
+        p["items"] = []
+        ax, ay = anchor if anchor is not None else self.piece_anchor(p)
+        color = COLORS[p["color"]]
+        outline = OUTLINE[p["color"]]
+        r = PIECE_R
+        for dx, dy in p["cells"]:
+            cx, cy = ax + dx * CELL, ay + dy * CELL
+            shadow = self.canvas.create_oval(cx-r+2, cy-r+3, cx+r+2, cy+r+3,
+                                             fill="#cbd2cb", outline="")
+            outer = self.canvas.create_oval(cx-r, cy-r, cx+r, cy+r,
+                                            fill=color, outline=outline, width=2)
+            inner = self.canvas.create_oval(cx-r*0.70, cy-r*0.70,
+                                            cx+r*0.70, cy+r*0.70,
+                                            fill=color, outline=outline, width=1)
+            highlight = self.canvas.create_arc(cx-r*0.53, cy-r*0.53,
+                                               cx+r*0.53, cy+r*0.53,
+                                               start=25, extent=130, style="arc",
+                                               outline="#ffffff", width=2)
+            p["items"].extend([shadow, outer, inner, highlight])
+
+    # ------------------------------------------------------------------
+    # Placement rules
+    # ------------------------------------------------------------------
+    @staticmethod
+    def is_board_cell(col, row):
+        if 0 <= col < BOARD_SIZE and 0 <= row < BOARD_SIZE:
+            return True
+        return (col, row) == EXIT_CELL
+
+    def occupied_cells(self, except_piece=None):
+        occupied = set()
+        for p in self.pieces:
+            if p is except_piece:
+                continue
+            x, y = p["pos"]
+            for dx, dy in p["cells"]:
+                occupied.add((x + dx, y + dy))
+        return occupied
+
+    def can_place(self, p, pos):
+        x, y = pos
+        occupied = self.occupied_cells(except_piece=p)
+        for dx, dy in p["cells"]:
+            col, row = x + dx, y + dy
+            if not self.is_board_cell(col, row):
+                return False
+            if (col, row) in occupied:
+                return False
+        return True
+
+    # ------------------------------------------------------------------
+    # Mouse handling
+    # ------------------------------------------------------------------
+    def find_hit(self, x, y):
+        """Return (piece, (dx, dy) cell under the point) or None."""
+        # Reverse order makes the topmost piece win if shapes visually overlap.
+        for p in reversed(self.pieces):
+            ax, ay = self.piece_anchor(p)
+            for dx, dy in p["cells"]:
+                cx, cy = ax + dx * CELL, ay + dy * CELL
+                if (x - cx) ** 2 + (y - cy) ** 2 <= PIECE_R ** 2:
+                    return p, (dx, dy)
+        return None
+
+    def on_motion(self, event):
+        self.mouse = (event.x, event.y)
+
+    def on_press(self, event):
+        self.mouse = (event.x, event.y)
+        hit = self.find_hit(event.x, event.y)
+        if hit is None:
+            return
+        p, _cell = hit
+        if self.solved:
+            self.status.set("Solved! Press Reset Board or pick another challenge.")
+            return
+        if p["color"] == "white":
+            self.status.set("White pieces are locked and can't be moved.")
+            return
+        self.drag = {
+            "piece": p,
+            "start_anchor": self.piece_anchor(p),
+            "start_x": event.x, "start_y": event.y,
+        }
+        # Move the piece to the end of the list so it is drawn/picked on top.
+        self.pieces.remove(p)
+        self.pieces.append(p)
+        self.draw_piece(p)
+        self.status.set("Slide the piece. It stops when it hits a wall or another piece.")
+
+    def on_drag(self, event):
+        if not self.drag:
+            return
+        self.mouse = (event.x, event.y)
+        p = self.drag["piece"]
+        ax0, ay0 = self.drag["start_anchor"]
+        ax = ax0 + event.x - self.drag["start_x"]
+        ay = ay0 + event.y - self.drag["start_y"]
+        # Square the pointer is asking the piece to move to.
+        target_col = round((ax - BOARD_X) / CELL - 0.5)
+        target_row = round((ay - BOARD_Y) / CELL - 0.5)
+        if self.slide_toward(p, target_col, target_row):
+            self.start_timer()  # the first real movement starts the clock
+            self.draw_piece(p)
+            self.check_solved()
+            if self.solved:
+                self.drag = None
+
+    def on_release(self, event):
+        if not self.drag:
+            return
+        self.drag = None
+        self.status.set("Get the red piece to the EXIT.")
+
+    # ------------------------------------------------------------------
+    # Sliding
+    # ------------------------------------------------------------------
+    def try_step(self, p, sx, sy):
+        """Slide the piece one square by (sx, sy) if the way is clear."""
+        x, y = p["pos"]
+        if not self.can_place(p, (x + sx, y + sy)):
+            return False
+        if sx and sy:
+            # A diagonal slide sweeps through the corner: it is blocked by a
+            # piece in either neighbouring square, and can't go through the
+            # corner of the exit opening.
+            occupied = self.occupied_cells(except_piece=p)
+            for dx, dy in p["cells"]:
+                cx, cy = x + dx, y + dy
+                if (cx + sx, cy) in occupied or (cx, cy + sy) in occupied:
+                    return False
+                if (cx, cy) == EXIT_CELL or (cx + sx, cy + sy) == EXIT_CELL:
+                    return False
+        p["pos"] = (x + sx, y + sy)
+        return True
+
+    def slide_toward(self, p, target_col, target_row):
+        """Walk the piece toward the target square, one clear step at a time.
+        Returns True if it moved at all."""
+        moved = False
+        for _ in range(4 * BOARD_SIZE):
+            x, y = p["pos"]
+            dx, dy = target_col - x, target_row - y
+            if dx == 0 and dy == 0:
+                break
+            sx = (dx > 0) - (dx < 0)
+            sy = (dy > 0) - (dy < 0)
+            if sx and sy:
+                steps = [(sx, sy)]
+                steps += [(sx, 0), (0, sy)] if abs(dx) >= abs(dy) else [(0, sy), (sx, 0)]
+            else:
+                steps = [(sx, sy)]
+            for step in steps:
+                if self.try_step(p, *step):
+                    moved = True
+                    break
+            else:
+                break  # blocked: the piece stays where it stopped
+        return moved
+
+    # ------------------------------------------------------------------
+    # Rotation
+    # ------------------------------------------------------------------
+    @staticmethod
+    def rotate_cells(cells, pivot, clockwise=True):
+        """Rotate cell offsets 90 degrees about `pivot` (one of the cells).
+
+        Returns (new_cells, shift). new_cells are normalised so the smallest
+        offsets are 0; shift is how far (in cells) the piece's origin cell
+        moved, so the pivot cell stays put on screen.
+        """
+        px, py = pivot
+        rotated = []
+        for dx, dy in cells:
+            rx, ry = dx - px, dy - py
+            rotated.append((-ry, rx) if clockwise else (ry, -rx))
+        min_x = min(x for x, _ in rotated)
+        min_y = min(y for _, y in rotated)
+        new_cells = [(x - min_x, y - min_y) for x, y in rotated]
+        return new_cells, (min_x + px, min_y + py)
+
+    def rotate_at(self, x, y, clockwise=True):
+        if not ALLOW_ROTATION:
+            self.status.set("Pieces only slide in this game, so they can't be rotated.")
+            return
+        if self.solved or self.drag:
+            return
+
+        hit = self.find_hit(x, y)
+        if hit is None:
+            return
+        p, cell = hit
+        if p["color"] == "white":
+            self.status.set("White pieces are locked and can't be moved.")
+            return
+        old_cells = list(p["cells"])
+        p["cells"], (sx, sy) = self.rotate_cells(old_cells, cell, clockwise)
+
+        px, py = p["pos"]
+        base = (px + sx, py + sy)
+        # Try the natural spot first, then nudge by one cell if blocked.
+        kicks = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)]
+        for kx, ky in kicks:
+            cand = (base[0] + kx, base[1] + ky)
+            if self.can_place(p, cand):
+                p["pos"] = cand
+                self.start_timer()
+                self.status.set(f"Rotated {p['name']}.")
+                break
+        else:
+            p["cells"] = old_cells
+            self.status.set("No room to rotate that piece there.")
+        self.draw_piece(p)
+        self.check_solved()
+
+    # ------------------------------------------------------------------
+    # Win check
+    # ------------------------------------------------------------------
+    def check_solved(self):
+        if self.solved:
+            return
+        for p in self.pieces:
+            if p["color"] != "red":
+                continue
+            x, y = p["pos"]
+            if any((x + dx, y + dy) == EXIT_CELL for dx, dy in p["cells"]):
+                self.finish()
+                return
+
+    def finish(self):
+        self.solved = True
+        seconds = self.stop_timer()
+        if seconds is None:
+            seconds = 0.0
+        text = self.format_time(seconds)
+        self.status.set(f"Solved! The red piece reached the exit in {text}.")
+
+    # ------------------------------------------------------------------
+    # Timer (starts on the first move, stops when the red piece exits)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def format_time(seconds):
+        minutes, secs = divmod(int(seconds), 60)
+        return f"{minutes:02d}:{secs:02d}"
+
+    def start_timer(self):
+        if self.timer_running or self.solved:
+            return
+        self.timer_running = True
+        self.timer_start = time.monotonic()
+        self._tick_timer()
+
+    def _tick_timer(self):
+        if not self.timer_running:
+            return
+        self.timer_var.set(self.format_time(time.monotonic() - self.timer_start))
+        self.timer_job = self.root.after(200, self._tick_timer)
+
+    def stop_timer(self):
+        """Stop the clock and return the elapsed seconds (None if never started)."""
+        elapsed = None
+        if self.timer_running and self.timer_start is not None:
+            elapsed = time.monotonic() - self.timer_start
+        self.timer_running = False
+        self._cancel_timer_job()
+        if elapsed is not None:
+            self.timer_var.set(self.format_time(elapsed))
+        return elapsed
+
+    def reset_timer(self):
+        self.timer_running = False
+        self.timer_start = None
+        self._cancel_timer_job()
+        self.timer_var.set("00:00")
+
+    def _cancel_timer_job(self):
+        if self.timer_job is not None:
+            try:
+                self.root.after_cancel(self.timer_job)
+            except tk.TclError:
+                pass
+            self.timer_job = None
+
+
+def main():
+    root = tk.Tk()
+    PuzzleApp(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
