@@ -329,12 +329,12 @@ class PuzzleApp:
         return occupied
 
     def can_place(self, p, pos):
-       # x, y = pos
-       # occupied = self.occupied_cells(except_piece=p)
-        #for dx, dy in p["cells"]:
-           # col, row = x + dx, y + dy
-           # if not self.is_board_cell(col, row):
-            #    return False
+        x, y = pos
+        occupied = self.occupied_cells(except_piece=p)
+        for dx, dy in p["cells"]:
+            col, row = x + dx, y + dy
+            if not self.is_board_cell(col, row):
+                return False
             #if (col, row) in occupied:
             #    return False
         return True
