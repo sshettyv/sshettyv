@@ -617,6 +617,7 @@ class App:
         self.timer_elapsed = 0.0
         self.timer_started_at = None
         self.timer_after_id = None
+        self.timer_armed = True   # auto-start on the first piece move after a reset
 
         self._build_ui()
         self.load_card(0)
@@ -686,13 +687,8 @@ class App:
         tbar.pack(fill="x", padx=6, pady=(6, 0))
         tk.Label(tbar, text="Timer:", bg=bg).pack(side="left", padx=(0, 2))
         self.timer_label = tk.Label(tbar, text="00:00:00", width=9, bg=bg,
-                                    font=("Courier", 14, "bold"))
+                                    font=("Courier", 25, "bold"))
         self.timer_label.pack(side="left")
-        self.btn_timer_start = tk.Button(tbar, text="Start", width=8, command=self.start_timer)
-        self.btn_timer_stop = tk.Button(tbar, text="Stop", width=8, command=self.stop_timer)
-        self.btn_timer_reset = tk.Button(tbar, text="Reset", width=8, command=self.reset_timer)
-        for b in (self.btn_timer_start, self.btn_timer_stop, self.btn_timer_reset):
-            b.pack(side="left", padx=4)
 
         self.status = tk.Label(self.panel, text="", wraplength=560, justify="left",
                                anchor="w", bg=bg, font=("TkDefaultFont", 10))
@@ -724,8 +720,6 @@ class App:
         hours, rem = divmod(total, 3600)
         minutes, seconds = divmod(rem, 60)
         self.timer_label.config(text=f"{hours:02d}:{minutes:02d}:{seconds:02d}")
-        self.btn_timer_start.config(state="disabled" if self.timer_running else "normal")
-        self.btn_timer_stop.config(state="normal" if self.timer_running else "disabled")
         if self.timer_running:
             self.timer_after_id = self.root.after(200, self._update_timer_display)
         else:
@@ -734,9 +728,15 @@ class App:
     def start_timer(self):
         if self.timer_running:
             return
+        self.timer_armed = False
         self.timer_running = True
         self.timer_started_at = time.monotonic()
         self._update_timer_display()
+
+    def auto_start_timer(self):
+        """Start the timer on the first piece move after a reset / new puzzle."""
+        if self.timer_armed:
+            self.start_timer()
 
     def stop_timer(self):
         if not self.timer_running:
@@ -753,6 +753,7 @@ class App:
         self._update_timer_display()
 
     def reset_timer(self):
+        self.timer_armed = True
         self.timer_running = False
         self.timer_elapsed = 0.0
         self.timer_started_at = None
@@ -931,6 +932,7 @@ class App:
         if not hit:
             return
         i, anchor, src = hit
+        self.auto_start_timer()
         if src == "board":
             self.shape[i] = normalize(self.placed.pop(i))
             if i in self.history:
@@ -987,6 +989,7 @@ class App:
                 self.placed[i] = moved
                 self.shape[i] = new
                 self.hint_steps = []
+                self.auto_start_timer()
         self.refresh()
 
     def on_key(self, e):
