@@ -16,8 +16,9 @@ Controls
   F ................. flip piece (under cursor or being dragged)
   Buttons ........... Reset, Undo (removes the last placed piece),
                       Hint (places one piece correctly), Solution
-  Timer ............. Start / Stop / Reset (also resets when you pick a
-                      new challenge or press the puzzle Reset)
+  Timer ............. Starts automatically when a piece is first moved;
+                      stops when solved; resets when you pick a new
+                      challenge or press the puzzle Reset
 
 Run:  python iq_quub.py
 """
@@ -247,30 +248,38 @@ class Game:
                                 height=max(BY + ROWS * CELL + 20, TY + rows_tray * SLOT_H + 10), bg="#fafafa",
                                 highlightthickness=0)
         self.canvas.pack(side="top")
-        bar = tk.Frame(root)
-        bar.pack(fill="x", pady=4)
-        tk.Label(bar, text="Challenge:").pack(side="left", padx=(8, 2))
-        self.combo = ttk.Combobox(bar, values=CHOICES, state="readonly", width=16)
+        # control panel: sits in the empty tray slots under the last piece
+        bg = "#fafafa"
+        panel = tk.Frame(self.canvas, bg=bg)
+        panel.place(x=TX + SLOT_W, y=TY + (len(NAMES) // TRAY_COLS) * SLOT_H,
+                    width=(TRAY_COLS - 1) * SLOT_W - 8, height=SLOT_H - 8)
+
+        row1 = tk.Frame(panel, bg=bg)
+        row1.pack(fill="x", pady=(2, 3))
+        tk.Button(row1, text="Reset", width=7, command=self.reset).pack(side="left", padx=2)
+        tk.Label(row1, text="Challenge:", bg=bg).pack(side="left", padx=(6, 2))
+        self.combo = ttk.Combobox(row1, values=CHOICES, state="readonly", width=12)
         self.combo.current(0)
         self.combo.pack(side="left")
         self.combo.bind("<<ComboboxSelected>>", self.on_choose)
-        for text, cmd in (("Reset", self.reset), ("Undo", self.undo),
-                          ("Hint", self.hint), ("Solution", self.show_solution)):
-            tk.Button(bar, text=text, width=8, command=cmd).pack(side="left", padx=4)
-        self.status = tk.Label(bar, text="")
-        self.status.pack(side="right", padx=8)
 
-        # timer
-        tbar = tk.Frame(root)
-        tbar.pack(fill="x", pady=(0, 6))
-        tk.Label(tbar, text="Timer:").pack(side="left", padx=(8, 2))
-        self.timer_label = tk.Label(tbar, text="00:00", width=7,
-                                    font=("Courier", 14, "bold"))
+        row2 = tk.Frame(panel, bg=bg)
+        row2.pack(fill="x", pady=3)
+        for text, cmd in (("Hint", self.hint), ("Solution", self.show_solution),
+                          ("Undo", self.undo)):
+            tk.Button(row2, text=text, width=7, command=cmd).pack(side="left", padx=2)
+
+        row3 = tk.Frame(panel, bg=bg)
+        row3.pack(fill="x", pady=3)
+        tk.Label(row3, text="Timer:", bg=bg, font=("Arial", 18, "bold")).pack(side="left", padx=(4, 6))
+        self.timer_label = tk.Label(row3, text="00:00", width=7, bg=bg,
+                                    font=("Courier", 25, "bold"))
         self.timer_label.pack(side="left")
-        for text, cmd in (("Start", self.timer_start), ("Stop", self.timer_stop),
-                          ("Reset", self.timer_reset)):
-            tk.Button(tbar, text=text, width=8, command=cmd).pack(side="left", padx=4)
+
+        self.status = tk.Label(panel, text="", bg=bg, anchor="w")
+        self.status.pack(fill="x", padx=6)
         self.running = False
+        self.armed = True         # auto-start on the first piece move after a reset
         self.elapsed = 0.0
         self.t0 = 0.0
         self.tick()
@@ -295,8 +304,14 @@ class Game:
     # ----------------------------------------------------------------- timer
     def timer_start(self):
         if not self.running:
+            self.armed = False
             self.running = True
             self.t0 = time.time() - self.elapsed
+
+    def timer_auto_start(self):
+        """Start the timer on the first piece move after a reset / new challenge."""
+        if self.armed:
+            self.timer_start()
 
     def timer_stop(self):
         if self.running:
@@ -305,6 +320,7 @@ class Game:
             self.show_time()
 
     def timer_reset(self):
+        self.armed = True
         self.running = False
         self.elapsed = 0.0
         self.show_time()
@@ -415,6 +431,7 @@ class Game:
         if not hit:
             return
         name, anchor, src = hit
+        self.timer_auto_start()
         self.placed[name] = None
         if name in self.history:
             self.history.remove(name)
@@ -443,7 +460,9 @@ class Game:
         self.draw()
         if all(v is not None for v in self.placed.values()):
             self.timer_stop()
-            messagebox.showinfo("Solved!", "Congratulations - you solved the puzzle!")
+            t = self.timer_label.cget("text")
+            messagebox.showinfo("Solved!",
+                                f"Congratulations - you solved the puzzle!\nTime: {t}")
 
     def transform_at(self, x, y, fn):
         if self.drag:
@@ -465,6 +484,7 @@ class Game:
             if self.valid(n, new_shape, nr0, nc0):
                 self.shape[n] = new_shape
                 self.placed[n] = (nr0, nc0)
+                self.timer_auto_start()
         self.draw()
 
     # ------------------------------------------------------------- helpers
