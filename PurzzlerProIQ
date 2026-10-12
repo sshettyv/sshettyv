@@ -22,6 +22,7 @@ next to this script in iq_puzzler_pieces_v2.json.
 import json
 import math
 import os
+import re
 import random
 import threading
 import time
@@ -579,7 +580,8 @@ TRAY_TOP = 34
 FREE = "Free play"
 PANEL_H = 170                # height reserved under the board for timer / status / hints
 SLOT = 4 * TS + 18            # room for the longest piece (4 balls) and its name
-
+STRAIGHT_SOLVED = 1   # cards 1..N on the straight board get a tick
+DIAGONAL_SOLVED = 0   # first N diagonal cards (41, 42, ...) get a tick
 
 def transform(cells, anchor, kind):
     """Rotate ('rot') or mirror ('flip') a shape and keep the 'handle' ball."""
@@ -590,7 +592,24 @@ def transform(cells, anchor, kind):
     mc = min(c for r, c in pts)
     return (tuple(sorted((r - mr, c - mc) for r, c in pts)), (a[0] - mr, a[1] - mc))
 
+def solved_count(layout):
+    return STRAIGHT_SOLVED if layout is STRAIGHT else DIAGONAL_SOLVED
 
+def set_solved(layout, n):
+    """Update the variable in memory and rewrite its line in this script."""
+    name = "STRAIGHT_SOLVED" if layout is STRAIGHT else "DIAGONAL_SOLVED"
+    globals()[name] = n
+    path = os.path.abspath(__file__)
+    try:
+        with open(path, encoding="utf-8") as f:
+            src = f.read()
+        src = re.sub(rf"^{name} = \d+", f"{name} = {n}", src, count=1, flags=re.M)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(src)
+    except OSError:
+        pass
+        
+        
 class App:
     def __init__(self, root):
         self.root = root
@@ -622,6 +641,11 @@ class App:
         self._build_ui()
         self.load_card(0)
         self._update_timer_display()
+        
+    def card_values(self, layout):
+        n = solved_count(layout)
+        return [FREE] + [("✔ " if i < n else "") + c[0]
+                         for i, c in enumerate(layout.cards)]
 
     # ---------------------------------------------------------------- UI
     def canvas_size(self):
@@ -651,7 +675,7 @@ class App:
         tk.Label(bar, text="Puzzle:").pack(side="left")
         self.card_var = tk.StringVar(value=FREE)
         self.card_box = ttk.Combobox(bar, textvariable=self.card_var, state="readonly",
-                                     width=20, values=[FREE] + [c[0] for c in STRAIGHT.cards])
+                                     width=20, values=self.card_values(STRAIGHT))
         self.card_box.pack(side="left", padx=(2, 10))
         self.card_box.bind("<<ComboboxSelected>>",
                            lambda e: self.load_card(self.card_box.current()))
@@ -1030,7 +1054,10 @@ class App:
         t = self.timer_label.cget("text")
         self.set_status(f"Solved! Time {t}.")
         messagebox.showinfo("Solved!", f"Congratulations - puzzle solved!\nTime: {t}")
-
+        if self.current and not self.used_hint and self.current == solved_count(self.layout) + 1:
+            set_solved(self.layout, self.current)
+            self.card_box.config(values=self.card_values(self.layout))
+            self.card_var.set(self.card_values(self.layout)[self.current])
     # ---------------------------------------------------- layout / cards
     def change_layout(self, idx):
         layout = LAYOUTS[idx]
@@ -1047,7 +1074,7 @@ class App:
         cw, ch = self.canvas_size()
         self.cv.config(width=cw, height=ch)
         self.place_panel()
-        self.card_box.config(values=[FREE] + [c[0] for c in layout.cards])
+        self.card_box.config(values=self.card_values(layout))
         self.load_card(0)
 
     def load_card(self, idx):
@@ -1056,6 +1083,7 @@ class App:
             return
         self.current = idx
         self.hint_steps = []
+        self.used_hint = False
         self.drag = None
         self.history = []
         self.shape = [normalize(p["cells"]) for p in self.pieces]
@@ -1071,7 +1099,7 @@ class App:
             self.placed, self.fixed = found, set(found)
             for i, cells in found.items():
                 self.shape[i] = normalize(cells)
-            self.card_var.set(label)
+            self.card_var.set(self.card_values(self.layout)[idx])
             self.set_status(f"Puzzle {label}: place the {len(self.pieces) - len(found)} "
                             "remaining pieces. Press Hint if you get stuck.")
         self.reset_timer()
@@ -1094,6 +1122,7 @@ class App:
     def request_hint(self, limit):
         if self.solving:
             return
+        self.used_hint = True
         if len(self.placed) == len(self.pieces):
             self.set_status("Every piece is already on the board.")
             return
