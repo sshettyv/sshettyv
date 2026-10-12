@@ -24,6 +24,8 @@ Controls:
   (Set ALLOW_ROTATION = True below to bring back right-click / R rotation.)
 """
 import time
+import os
+import re
 import tkinter as tk
 from tkinter import ttk
 
@@ -66,6 +68,7 @@ OUTLINE = {
 # Each challenge lists the squares (column, row) every piece covers, with
 # (0, 0) at the top-left of the 5x5 board.  (5, 0) is the EXIT square.
 # "white" holds one square per single white piece.
+CHALLENGES_SOLVED = 3   # challenges 1..N get a tick in the drop-down
 LEVELS = [
     ("Starter", 1, 12),
     ("Junior", 13, 24),
@@ -148,7 +151,26 @@ def level_name(n):
 def challenge_label(n):
     return f"Challenge {n}  ({level_name(n)})"
 
+def dropdown_label(n):
+    return ("✔ " if n <= CHALLENGES_SOLVED else "") + challenge_label(n)
 
+
+def set_challenges_solved(n):
+    """Update the variable in memory and rewrite its line in this script."""
+    global CHALLENGES_SOLVED
+    CHALLENGES_SOLVED = n
+    path = os.path.abspath(__file__)
+    try:
+        with open(path, encoding="utf-8") as f:
+            src = f.read()
+        src = re.sub(r"^CHALLENGES_SOLVED = \d+", f"CHALLENGES_SOLVED = {n}",
+                     src, count=1, flags=re.M)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(src)
+    except OSError:
+        pass
+        
+        
 def build_pieces(number):
     """Turn a challenge's absolute squares into piece dicts."""
     pieces = []
@@ -195,10 +217,10 @@ class PuzzleApp:
         tk.Label(picker, text="Challenge:", font=("Arial", 11, "bold"),
                  bg="#edf1ec", fg="#25352f").pack(side="left")
         self.current = 1
-        self.challenge_var = tk.StringVar(value=challenge_label(self.current))
+        self.challenge_var = tk.StringVar(value=dropdown_label(self.current))
         self.challenge_box = ttk.Combobox(
             picker, textvariable=self.challenge_var, state="readonly", width=26,
-            values=[challenge_label(n) for n in sorted(CHALLENGES)], height=15)
+            values=[dropdown_label(n) for n in sorted(CHALLENGES)], height=15)
         self.challenge_box.pack(side="left", padx=8)
         self.challenge_box.bind("<<ComboboxSelected>>", self.on_challenge_selected)
 
@@ -218,7 +240,6 @@ class PuzzleApp:
         self.timer_start = None
         self.timer_job = None
         self.reset()
-
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
@@ -234,7 +255,7 @@ class PuzzleApp:
     # Challenge selection / setup / drawing
     # ------------------------------------------------------------------
     def on_challenge_selected(self, _event=None):
-        self.current = int(self.challenge_var.get().split()[1])
+        self.current = sorted(CHALLENGES)[self.challenge_box.current()]
         self.reset()
         self.challenge_box.selection_clear()
         self.canvas.focus_set()
@@ -521,10 +542,16 @@ class PuzzleApp:
     def finish(self):
         self.solved = True
         seconds = self.stop_timer()
+        played = seconds is not None    # None = the board was already solved at the start
         if seconds is None:
             seconds = 0.0
         text = self.format_time(seconds)
         self.status.set(f"Solved! The red piece reached the exit in {text}.")
+
+        if played and self.current == CHALLENGES_SOLVED + 1:
+            set_challenges_solved(self.current)
+            self.challenge_box.config(values=[dropdown_label(n) for n in sorted(CHALLENGES)])
+            self.challenge_var.set(dropdown_label(self.current))
 
     # ------------------------------------------------------------------
     # Timer (starts on the first move, stops when the red piece exits)
